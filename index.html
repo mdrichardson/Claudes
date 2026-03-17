@@ -120,10 +120,15 @@
             <button class="usage-tab" data-usage-tab="sessions">Sessions</button>
           </div>
           <div id="usage-tab-summary" class="usage-tab-content active">
+            <div class="usage-period-toggle">
+              <button class="usage-period-btn" data-period="7d">7 Days</button>
+              <button class="usage-period-btn active" data-period="30d">30 Days</button>
+              <button class="usage-period-btn" data-period="all">All Time</button>
+            </div>
             <div class="usage-summary-cards" id="usage-summary-cards"></div>
             <div id="usage-environmental" class="usage-environmental"></div>
             <div class="usage-chart-container">
-              <h3 class="usage-section-title">Last 30 Days</h3>
+              <h3 class="usage-section-title" id="usage-chart-title">Last 30 Days</h3>
               <div class="usage-chart" id="usage-chart-30d"></div>
             </div>
           </div>

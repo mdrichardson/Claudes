@@ -2106,12 +2106,11 @@ function buildUsageCard(label, value, sub) {
 
 function renderUsageSummary(data) {
   var totalInput = 0, totalOutput = 0, totalCacheRead = 0;
-  var todayInput = 0, todayOutput = 0;
-  var todayStart = new Date(); todayStart.setHours(0,0,0,0);
-  var todayMs = todayStart.getTime();
   var last7dMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  var week7Input = 0, week7Output = 0;
-  var projectSet = new Set();
+  var last30dMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  var week7Input = 0, week7Output = 0, week7Cache = 0, week7Sessions = 0;
+  var month30Input = 0, month30Output = 0, month30Cache = 0, month30Sessions = 0;
+  var projectSet7 = new Set(), projectSet30 = new Set(), projectSetAll = new Set();
 
   for (var i = 0; i < data.length; i++) {
     var s = data[i];
@@ -2119,31 +2118,68 @@ function renderUsageSummary(data) {
     totalInput += sessionInput;
     totalOutput += s.outputTokens;
     totalCacheRead += s.cacheReadTokens;
-    projectSet.add(s.projectKey);
+    projectSetAll.add(s.projectKey);
 
-    if (s.lastTimestamp >= todayMs) {
-      todayInput += sessionInput;
-      todayOutput += s.outputTokens;
-    }
     if (s.lastTimestamp >= last7dMs) {
       week7Input += sessionInput;
       week7Output += s.outputTokens;
+      week7Cache += s.cacheReadTokens;
+      week7Sessions++;
+      projectSet7.add(s.projectKey);
+    }
+    if (s.lastTimestamp >= last30dMs) {
+      month30Input += sessionInput;
+      month30Output += s.outputTokens;
+      month30Cache += s.cacheReadTokens;
+      month30Sessions++;
+      projectSet30.add(s.projectKey);
     }
   }
 
-  var container = document.getElementById('usage-summary-cards');
-  container.innerHTML = '';
-  container.appendChild(buildUsageCard('Today', formatTokenCount(todayInput + todayOutput), formatTokenCount(todayInput) + ' in / ' + formatTokenCount(todayOutput) + ' out'));
-  container.appendChild(buildUsageCard('Last 7 Days', formatTokenCount(week7Input + week7Output), formatTokenCount(week7Input) + ' in / ' + formatTokenCount(week7Output) + ' out'));
-  container.appendChild(buildUsageCard('All Time', formatTokenCount(totalInput + totalOutput), formatTokenCount(totalInput) + ' in / ' + formatTokenCount(totalOutput) + ' out'));
-  container.appendChild(buildUsageCard('Cache Savings', formatTokenCount(totalCacheRead), 'read from cache'));
-  container.appendChild(buildUsageCard('Sessions', String(data.length), projectSet.size + ' projects'));
+  var periods = {
+    '7d':  { input: week7Input,  output: week7Output,  cache: week7Cache,    sessions: week7Sessions,   projects: projectSet7.size },
+    '30d': { input: month30Input, output: month30Output, cache: month30Cache, sessions: month30Sessions, projects: projectSet30.size },
+    'all': { input: totalInput,   output: totalOutput,   cache: totalCacheRead, sessions: data.length,   projects: projectSetAll.size }
+  };
 
-  renderBarChart('usage-chart-30d', data, 30);
-  renderEnvironmentalImpact(totalInput, totalOutput, totalCacheRead);
+  var periodLabels = { '7d': 'Last 7 Days', '30d': 'Last 30 Days', 'all': 'All Time' };
+  var chartDays = { '7d': 7, '30d': 30, 'all': 90 };
+
+  function renderPeriod(period) {
+    var p = periods[period];
+
+    var container = document.getElementById('usage-summary-cards');
+    container.textContent = '';
+    container.appendChild(buildUsageCard('Total Tokens', formatTokenCount(p.input + p.output), formatTokenCount(p.input) + ' in / ' + formatTokenCount(p.output) + ' out'));
+    container.appendChild(buildUsageCard('Cache Savings', formatTokenCount(p.cache), 'read from cache'));
+    container.appendChild(buildUsageCard('Sessions', String(p.sessions), p.projects + ' projects'));
+
+    var chartTitle = document.getElementById('usage-chart-title');
+    if (chartTitle) chartTitle.textContent = periodLabels[period];
+    renderBarChart('usage-chart-30d', data, chartDays[period]);
+    renderEnvironmentalImpact(p.input, p.output, p.cache, periodLabels[period]);
+  }
+
+  // Wire up period toggle buttons (clone to remove prior listeners)
+  var oldBtns = document.querySelectorAll('.usage-period-btn');
+  var btns = [];
+  for (var b = 0; b < oldBtns.length; b++) {
+    var clone = oldBtns[b].cloneNode(true);
+    oldBtns[b].parentNode.replaceChild(clone, oldBtns[b]);
+    btns.push(clone);
+  }
+  for (var b = 0; b < btns.length; b++) {
+    btns[b].addEventListener('click', function() {
+      for (var j = 0; j < btns.length; j++) btns[j].classList.remove('active');
+      this.classList.add('active');
+      renderPeriod(this.getAttribute('data-period'));
+    });
+  }
+
+  renderPeriod('30d');
 }
 
-function renderEnvironmentalImpact(totalInput, totalOutput, totalCacheRead) {
+function renderEnvironmentalImpact(totalInput, totalOutput, totalCacheRead, periodLabel) {
   // Energy estimates (Wh per million tokens) — based on published LLM inference research
   var WH_PER_M_INPUT = 1.0;
   var WH_PER_M_OUTPUT = 5.0;
@@ -2228,7 +2264,7 @@ function renderEnvironmentalImpact(totalInput, totalOutput, totalCacheRead) {
   headerIcon.textContent = '\uD83C\uDF0D';
   var headerTitle = document.createElement('span');
   headerTitle.className = 'usage-env-title';
-  headerTitle.textContent = 'Environmental Impact (estimated)';
+  headerTitle.textContent = 'Environmental Impact \u2014 ' + (periodLabel || 'All Time') + ' (estimated)';
   header.appendChild(headerIcon);
   header.appendChild(headerTitle);
   container.appendChild(header);
