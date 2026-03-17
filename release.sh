@@ -2,24 +2,30 @@
 set -e
 
 # Release script for Claudes
-# Usage: ./release.sh <version>
-# Example: ./release.sh 2.1.0
+# Usage: ./release.sh [major|minor|patch|x.y.z]
+# Default: patch bump
 
-VERSION="$1"
+CURRENT=$(node -p "require('./package.json').version")
+IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
 
-if [ -z "$VERSION" ]; then
-  echo "Usage: ./release.sh <version>"
-  echo "Example: ./release.sh 2.1.0"
-  exit 1
-fi
+ARG="${1:-patch}"
 
-# Validate version format
-if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-  echo "Error: Version must be in semver format (e.g. 2.1.0)"
-  exit 1
-fi
+case "$ARG" in
+  major) VERSION="$((MAJOR + 1)).0.0" ;;
+  minor) VERSION="${MAJOR}.$((MINOR + 1)).0" ;;
+  patch) VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+  *)
+    if echo "$ARG" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+      VERSION="$ARG"
+    else
+      echo "Usage: ./release.sh [major|minor|patch|x.y.z]"
+      echo "Current version: $CURRENT"
+      exit 1
+    fi
+    ;;
+esac
 
-echo "==> Releasing Claudes v${VERSION}"
+echo "==> Releasing Claudes v${VERSION} (was v${CURRENT})"
 
 # Update version in package.json
 node -e "

@@ -308,6 +308,7 @@ function setActiveProject(index, isStartup) {
   var emptyState = columnsContainer.querySelector('.empty-state');
   if (emptyState) emptyState.remove();
 
+  lastGitRaw = null; // invalidate cache on project switch
   var state = getOrCreateProjectState(newKey);
   state.containerEl.style.display = 'flex';
   refreshExplorer();
@@ -567,6 +568,7 @@ function addColumn(args, targetRow, opts) {
     fitAddon.fit();
     var sendMsg = { type: 'create', id: id, cols: terminal.cols, rows: terminal.rows, cwd: cwd, args: claudeArgs };
     if (cmd) sendMsg.cmd = cmd;
+    if (opts.env) sendMsg.env = opts.env;
     wsSend(sendMsg);
 
     if (!cmd && window.electronAPI) {
@@ -997,9 +999,9 @@ document.querySelectorAll('.explorer-tab').forEach(function (tab) {
     document.querySelectorAll('.tab-content').forEach(function (tc) { tc.classList.remove('active'); });
     tab.classList.add('active');
     document.getElementById('tab-' + tabName).classList.add('active');
-    if (tabName === 'files') refreshFileTree();
-    if (tabName === 'git') refreshGitStatus();
-    if (tabName === 'run') refreshRunConfigs();
+    if (tabName === 'files') { stopGitPolling(); refreshFileTree(); }
+    else if (tabName === 'git') { refreshGitStatus(true); startGitPolling(); }
+    else if (tabName === 'run') { stopGitPolling(); refreshRunConfigs(); }
   });
 });
 
@@ -1007,6 +1009,7 @@ function toggleExplorer() {
   explorerPanel.classList.toggle('collapsed');
   explorerResizeHandle.classList.toggle('hidden');
   setTimeout(refitAll, 200);
+  if (isGitTabActive()) startGitPolling(); else stopGitPolling();
 }
 
 // Explorer resize handle
@@ -1091,6 +1094,11 @@ function createTreeItem(entry, level) {
         arrow.textContent = '\u25BE';
       }
     });
+  } else {
+    row.addEventListener('click', function () {
+      openFileEditor(entry.path);
+    });
+    row.classList.add('tree-file-row');
   }
 
   return item;
@@ -1102,78 +1110,291 @@ function createTreeItem(entry, level) {
 
 var gitCommitMsg = document.getElementById('git-commit-msg');
 var gitStatusMsgEl = document.getElementById('git-status-msg');
+var gitAmendCheckbox = document.getElementById('git-amend-checkbox');
+var gitPollTimer = null;
+var lastGitRaw = null;
+var gitExpandedDiff = null; // track which file has diff open
 
-function refreshGitStatus() {
+function refreshGitStatus(force) {
   if (!activeProjectKey || !window.electronAPI) return;
+
+  var fetchAll = [
+    window.electronAPI.gitStatus(activeProjectKey),
+    window.electronAPI.gitBranch(activeProjectKey),
+    window.electronAPI.gitAheadBehind(activeProjectKey),
+    window.electronAPI.gitStashList(activeProjectKey),
+    window.electronAPI.gitLog(activeProjectKey, 10)
+  ];
+
+  if (!force) {
+    Promise.all(fetchAll).then(function (results) {
+      var rawKey = JSON.stringify(results[0]) + '|' + results[1] + '|' + JSON.stringify(results[2]) + '|' + results[3].length + '|' + JSON.stringify(results[4]);
+      if (rawKey === lastGitRaw) return;
+      lastGitRaw = rawKey;
+      renderGitStatus(results[0], results[1], results[2], results[3], results[4]);
+    });
+    return;
+  }
+
+  lastGitRaw = null;
+  Promise.all(fetchAll).then(function (results) {
+    lastGitRaw = JSON.stringify(results[0]) + '|' + results[1] + '|' + JSON.stringify(results[2]) + '|' + results[3].length + '|' + JSON.stringify(results[4]);
+    renderGitStatus(results[0], results[1], results[2], results[3], results[4]);
+  });
+}
+
+function renderGitStatus(files, branch, aheadBehind, stashes, commits) {
   while (gitHeaderEl.firstChild) gitHeaderEl.removeChild(gitHeaderEl.firstChild);
   while (gitChangesEl.firstChild) gitChangesEl.removeChild(gitChangesEl.firstChild);
 
-  // Branch + pull/push buttons
-  window.electronAPI.gitBranch(activeProjectKey).then(function (branch) {
-    var row = document.createElement('div');
-    row.className = 'git-branch-row';
+  // Branch row (clickable branch switcher + pull/push/stash buttons)
+  var row = document.createElement('div');
+  row.className = 'git-branch-row';
+  row.style.position = 'relative';
 
-    var branchLabel = document.createElement('span');
-    branchLabel.className = 'git-branch-name';
-    branchLabel.textContent = '\u2387 ' + (branch || 'detached');
-    row.appendChild(branchLabel);
-
-    var actions = document.createElement('span');
-    actions.className = 'git-branch-actions';
-
-    var pullBtn = document.createElement('button');
-    pullBtn.className = 'git-action-btn';
-    pullBtn.textContent = '\u2193 Pull';
-    pullBtn.title = 'Pull';
-    pullBtn.addEventListener('click', function () { gitPull(); });
-
-    var pushBtn = document.createElement('button');
-    pushBtn.className = 'git-action-btn';
-    pushBtn.textContent = '\u2191 Push';
-    pushBtn.title = 'Push';
-    pushBtn.addEventListener('click', function () { gitPush(); });
-
-    actions.appendChild(pullBtn);
-    actions.appendChild(pushBtn);
-    row.appendChild(actions);
-    gitHeaderEl.appendChild(row);
+  var branchLabel = document.createElement('span');
+  branchLabel.className = 'git-branch-name git-branch-clickable';
+  branchLabel.textContent = '\u2387 ' + (branch || 'detached') + ' \u25BE';
+  branchLabel.title = 'Switch branch';
+  branchLabel.addEventListener('click', function (e) {
+    e.stopPropagation();
+    toggleBranchDropdown(row, branch);
   });
+  row.appendChild(branchLabel);
+
+  var actions = document.createElement('span');
+  actions.className = 'git-branch-actions';
+
+  // Stash button
+  var stashBtn = document.createElement('button');
+  stashBtn.className = 'git-action-btn';
+  stashBtn.textContent = '\u2691 Stash';
+  stashBtn.title = 'Stash changes';
+  stashBtn.addEventListener('click', function () { gitStashPush(); });
+  actions.appendChild(stashBtn);
+
+  // Pop button with badge
+  var popBtn = document.createElement('button');
+  popBtn.className = 'git-action-btn';
+  popBtn.title = 'Pop stash';
+  popBtn.textContent = '\u2691 Pop';
+  if (stashes.length > 0) {
+    var badge = document.createElement('span');
+    badge.className = 'git-badge';
+    badge.textContent = stashes.length;
+    popBtn.appendChild(badge);
+  } else {
+    popBtn.disabled = true;
+    popBtn.style.opacity = '0.4';
+  }
+  popBtn.addEventListener('click', function () { gitStashPop(); });
+  actions.appendChild(popBtn);
+
+  // Pull button with behind count
+  var pullBtn = document.createElement('button');
+  pullBtn.className = 'git-action-btn';
+  pullBtn.title = 'Pull';
+  pullBtn.textContent = '\u2193 Pull';
+  if (aheadBehind.behind > 0) {
+    var pullBadge = document.createElement('span');
+    pullBadge.className = 'git-badge';
+    pullBadge.textContent = aheadBehind.behind;
+    pullBtn.appendChild(pullBadge);
+  }
+  pullBtn.addEventListener('click', function () { gitPull(); });
+  actions.appendChild(pullBtn);
+
+  // Push button with ahead count
+  var pushBtn = document.createElement('button');
+  pushBtn.className = 'git-action-btn';
+  pushBtn.title = 'Push';
+  pushBtn.textContent = '\u2191 Push';
+  if (aheadBehind.ahead > 0) {
+    var pushBadge = document.createElement('span');
+    pushBadge.className = 'git-badge';
+    pushBadge.textContent = aheadBehind.ahead;
+    pushBtn.appendChild(pushBadge);
+  }
+  pushBtn.addEventListener('click', function () { gitPush(); });
+  actions.appendChild(pushBtn);
+
+  row.appendChild(actions);
+  gitHeaderEl.appendChild(row);
 
   // Parse status into staged vs unstaged
-  window.electronAPI.gitStatus(activeProjectKey).then(function (files) {
-    var staged = [];
-    var changes = [];
+  var staged = [];
+  var changes = [];
 
-    for (var i = 0; i < files.length; i++) {
-      var x = files[i].status.charAt(0);
-      var y = files[i].status.charAt(1);
-      var file = files[i].file;
+  for (var i = 0; i < files.length; i++) {
+    var x = files[i].status.charAt(0);
+    var y = files[i].status.charAt(1);
+    var file = files[i].file;
 
-      if (x !== ' ' && x !== '?') {
-        staged.push({ status: x, file: file });
-      }
-      if (x === '?') {
-        changes.push({ status: '?', file: file, untracked: true });
-      } else if (y !== ' ') {
-        changes.push({ status: y, file: file, untracked: false });
-      }
+    if (x !== ' ' && x !== '?') {
+      staged.push({ status: x, file: file });
     }
-
-    if (staged.length === 0 && changes.length === 0) {
-      var empty = document.createElement('div');
-      empty.className = 'git-empty';
-      empty.textContent = 'No changes';
-      gitChangesEl.appendChild(empty);
-      return;
+    if (x === '?') {
+      changes.push({ status: '?', file: file, untracked: true });
+    } else if (y !== ' ') {
+      changes.push({ status: y, file: file, untracked: false });
     }
+  }
 
-    if (staged.length > 0) {
-      gitChangesEl.appendChild(createGitSection('Staged Changes', staged, true));
-    }
-    if (changes.length > 0) {
-      gitChangesEl.appendChild(createGitSection('Changes', changes, false));
+  if (staged.length === 0 && changes.length === 0 && commits.length === 0) {
+    var empty = document.createElement('div');
+    empty.className = 'git-empty';
+    empty.textContent = 'No changes';
+    gitChangesEl.appendChild(empty);
+    return;
+  }
+
+  if (staged.length > 0) {
+    gitChangesEl.appendChild(createGitSection('Staged Changes', staged, true));
+  }
+  if (changes.length > 0) {
+    gitChangesEl.appendChild(createGitSection('Changes', changes, false));
+  }
+
+  // Commit log section
+  if (commits.length > 0) {
+    gitChangesEl.appendChild(createGitLogSection(commits));
+  }
+}
+
+// Branch dropdown
+function toggleBranchDropdown(parentRow, currentBranch) {
+  var existing = parentRow.querySelector('.git-branch-dropdown');
+  if (existing) { existing.remove(); return; }
+
+  var dropdown = document.createElement('div');
+  dropdown.className = 'git-branch-dropdown';
+
+  // New branch option
+  var newOpt = document.createElement('div');
+  newOpt.className = 'git-branch-dropdown-item git-branch-new-option';
+  newOpt.textContent = '+ New Branch...';
+  newOpt.addEventListener('click', function (e) {
+    e.stopPropagation();
+    showBranchCreateInput(dropdown, currentBranch);
+  });
+  dropdown.appendChild(newOpt);
+
+  window.electronAPI.gitBranches(activeProjectKey).then(function (branches) {
+    for (var i = 0; i < branches.length; i++) {
+      (function (b) {
+        var item = document.createElement('div');
+        item.className = 'git-branch-dropdown-item' + (b.isCurrent ? ' current' : '');
+        item.textContent = (b.isCurrent ? '\u2713 ' : '  ') + b.name;
+        if (!b.isCurrent) {
+          item.addEventListener('click', function (e) {
+            e.stopPropagation();
+            dropdown.remove();
+            gitCheckout(b.name);
+          });
+        }
+        dropdown.appendChild(item);
+      })(branches[i]);
     }
   });
+
+  parentRow.appendChild(dropdown);
+
+  // Close on outside click
+  var closeHandler = function (e) {
+    if (!dropdown.contains(e.target) && e.target !== parentRow.querySelector('.git-branch-name')) {
+      dropdown.remove();
+      document.removeEventListener('click', closeHandler);
+    }
+  };
+  setTimeout(function () { document.addEventListener('click', closeHandler); }, 0);
+}
+
+function showBranchCreateInput(dropdown, currentBranch) {
+  // Replace dropdown content with input
+  while (dropdown.firstChild) dropdown.removeChild(dropdown.firstChild);
+  var createRow = document.createElement('div');
+  createRow.className = 'git-branch-create-row';
+  var input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'Branch name...';
+  var createBtn = document.createElement('button');
+  createBtn.textContent = 'Create';
+  createBtn.addEventListener('click', function () {
+    var name = input.value.trim();
+    if (name) { dropdown.remove(); gitCreateBranch(name); }
+  });
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { createBtn.click(); }
+    if (e.key === 'Escape') { dropdown.remove(); }
+  });
+  createRow.appendChild(input);
+  createRow.appendChild(createBtn);
+  dropdown.appendChild(createRow);
+  input.focus();
+}
+
+// Commit log section
+function createGitLogSection(commits) {
+  var section = document.createElement('div');
+  section.className = 'git-section';
+
+  var header = document.createElement('div');
+  header.className = 'git-section-header';
+
+  var arrow = document.createElement('span');
+  arrow.className = 'git-section-arrow';
+  arrow.textContent = '\u25B8'; // collapsed by default
+
+  var label = document.createElement('span');
+  label.className = 'git-section-label';
+  label.textContent = 'Recent Commits (' + commits.length + ')';
+
+  header.appendChild(arrow);
+  header.appendChild(label);
+  section.appendChild(header);
+
+  var list = document.createElement('div');
+  list.className = 'git-section-list';
+  list.style.display = 'none'; // collapsed by default
+
+  for (var i = 0; i < commits.length; i++) {
+    var entry = document.createElement('div');
+    entry.className = 'git-log-entry';
+    var hash = document.createElement('span');
+    hash.className = 'git-log-hash';
+    hash.textContent = commits[i].hash;
+    var msg = document.createElement('span');
+    msg.className = 'git-log-msg';
+    msg.textContent = commits[i].message;
+    entry.appendChild(hash);
+    entry.appendChild(msg);
+    list.appendChild(entry);
+  }
+
+  section.appendChild(list);
+
+  header.addEventListener('click', function () {
+    var collapsed = list.style.display === 'none';
+    list.style.display = collapsed ? 'block' : 'none';
+    arrow.textContent = collapsed ? '\u25BE' : '\u25B8';
+  });
+
+  return section;
+}
+
+function startGitPolling() {
+  stopGitPolling();
+  gitPollTimer = setInterval(function () { refreshGitStatus(); }, 3000);
+}
+
+function stopGitPolling() {
+  if (gitPollTimer) { clearInterval(gitPollTimer); gitPollTimer = null; }
+}
+
+function isGitTabActive() {
+  var activeTab = document.querySelector('.explorer-tab.active');
+  return activeTab && activeTab.dataset.tab === 'git' &&
+    !explorerPanel.classList.contains('collapsed');
 }
 
 function createGitSection(title, files, isStaged) {
@@ -1233,6 +1454,9 @@ function createGitSection(title, files, isStaged) {
 }
 
 function createGitFileRow(file, isStaged) {
+  var container = document.createElement('div');
+  container.className = 'git-file-container';
+
   var row = document.createElement('div');
   row.className = 'git-file';
 
@@ -1243,6 +1467,53 @@ function createGitFileRow(file, isStaged) {
   var nameEl = document.createElement('span');
   nameEl.className = 'git-filename';
   nameEl.textContent = file.file;
+  nameEl.title = 'Click to view diff';
+
+  // Click filename to toggle diff
+  nameEl.addEventListener('click', function (e) {
+    e.stopPropagation();
+    var diffKey = (isStaged ? 'staged:' : 'unstaged:') + file.file;
+    var existingDiff = container.querySelector('.git-diff-content');
+    if (existingDiff) {
+      existingDiff.remove();
+      gitExpandedDiff = null;
+      return;
+    }
+    // Close any other open diff
+    var allDiffs = gitChangesEl.querySelectorAll('.git-diff-content');
+    for (var d = 0; d < allDiffs.length; d++) allDiffs[d].remove();
+
+    gitExpandedDiff = diffKey;
+    var diffEl = document.createElement('pre');
+    diffEl.className = 'git-diff-content';
+    diffEl.textContent = 'Loading...';
+    container.appendChild(diffEl);
+
+    window.electronAPI.gitDiff(activeProjectKey, file.file, isStaged).then(function (diffText) {
+      diffEl.textContent = '';
+      if (!diffText || !diffText.trim()) {
+        diffEl.textContent = '(no diff available)';
+        return;
+      }
+      var lines = diffText.split('\n');
+      for (var li = 0; li < lines.length; li++) {
+        var span = document.createElement('span');
+        var line = lines[li];
+        if (line.startsWith('+++') || line.startsWith('---')) {
+          span.className = 'diff-meta';
+        } else if (line.startsWith('+')) {
+          span.className = 'diff-add';
+        } else if (line.startsWith('-')) {
+          span.className = 'diff-del';
+        } else if (line.startsWith('@@')) {
+          span.className = 'diff-hunk';
+        }
+        span.textContent = line;
+        diffEl.appendChild(span);
+        if (li < lines.length - 1) diffEl.appendChild(document.createTextNode('\n'));
+      }
+    });
+  });
 
   var actions = document.createElement('span');
   actions.className = 'git-file-actions';
@@ -1275,7 +1546,8 @@ function createGitFileRow(file, isStaged) {
   row.appendChild(statusEl);
   row.appendChild(nameEl);
   row.appendChild(actions);
-  return row;
+  container.appendChild(row);
+  return container;
 }
 
 function gitStatusClass(status) {
@@ -1314,13 +1586,67 @@ function gitCommit() {
   if (!activeProjectKey || !window.electronAPI) return;
   var msg = gitCommitMsg.value.trim();
   if (!msg) return;
-  window.electronAPI.gitCommit(activeProjectKey, msg).then(function (result) {
+  var amend = gitAmendCheckbox && gitAmendCheckbox.checked;
+  window.electronAPI.gitCommit(activeProjectKey, msg, amend).then(function (result) {
     if (result.success) {
       gitCommitMsg.value = '';
-      showGitStatus('Committed successfully');
-      refreshGitStatus();
+      if (gitAmendCheckbox) gitAmendCheckbox.checked = false;
+      showGitStatus(amend ? 'Amended successfully' : 'Committed successfully');
+      refreshGitStatus(true);
     } else {
       showGitStatus('Commit failed: ' + result.error, true);
+    }
+  });
+}
+
+function gitCheckout(branchName) {
+  if (!activeProjectKey || !window.electronAPI) return;
+  showGitStatus('Switching to ' + branchName + '...');
+  window.electronAPI.gitCheckout(activeProjectKey, branchName).then(function (result) {
+    if (result.success) {
+      showGitStatus('Switched to ' + branchName);
+      refreshGitStatus(true);
+    } else {
+      showGitStatus('Checkout failed: ' + result.error, true);
+    }
+  });
+}
+
+function gitCreateBranch(branchName) {
+  if (!activeProjectKey || !window.electronAPI) return;
+  showGitStatus('Creating ' + branchName + '...');
+  window.electronAPI.gitCreateBranch(activeProjectKey, branchName).then(function (result) {
+    if (result.success) {
+      showGitStatus('Created and switched to ' + branchName);
+      refreshGitStatus(true);
+    } else {
+      showGitStatus('Create branch failed: ' + result.error, true);
+    }
+  });
+}
+
+function gitStashPush() {
+  if (!activeProjectKey || !window.electronAPI) return;
+  showGitStatus('Stashing...');
+  window.electronAPI.gitStashPush(activeProjectKey).then(function (result) {
+    if (result.success) {
+      showGitStatus('Changes stashed');
+      refreshGitStatus(true);
+    } else {
+      showGitStatus('Stash failed: ' + result.error, true);
+    }
+  });
+}
+
+function gitStashPop() {
+  if (!activeProjectKey || !window.electronAPI) return;
+  showGitStatus('Popping stash...');
+  window.electronAPI.gitStashPop(activeProjectKey).then(function (result) {
+    if (result.success) {
+      showGitStatus('Stash popped');
+      refreshGitStatus(true);
+    } else {
+      showGitStatus('Stash pop failed: ' + result.error, true);
     }
   });
 }
@@ -1371,7 +1697,7 @@ function refreshRunConfigs() {
     if (configs.length === 0) {
       var empty = document.createElement('div');
       empty.className = 'run-empty';
-      empty.textContent = 'No launch.json found';
+      empty.textContent = 'No launch configurations found';
       runConfigsEl.appendChild(empty);
       return;
     }
@@ -1407,9 +1733,22 @@ function launchConfig(config) {
     if (!str) return str;
     return str.replace(/\$\{workspaceFolder\}/g, activeProjectKey);
   }
-  var cmd, cmdArgs, cwd;
+  var cmd, cmdArgs, cwd, env;
   cwd = config.cwd ? resolve(config.cwd) : activeProjectKey;
-  if (config.type === 'node' || config.type === 'pwa-node') {
+  env = config.env || null;
+  if (config.type === 'dotnet-project') {
+    cmd = 'dotnet';
+    cmdArgs = ['run'];
+    if (config.applicationUrl) {
+      cmdArgs.push('--urls');
+      cmdArgs.push(config.applicationUrl);
+    }
+  } else if (config.type === 'coreclr') {
+    cmd = 'dotnet';
+    cmdArgs = [];
+    if (config.program) cmdArgs.push(resolve(config.program));
+    if (config.args) cmdArgs = cmdArgs.concat(config.args.map(resolve));
+  } else if (config.type === 'node' || config.type === 'pwa-node') {
     cmd = config.runtimeExecutable || 'node';
     cmdArgs = [];
     if (config.runtimeArgs) cmdArgs = cmdArgs.concat(config.runtimeArgs.map(resolve));
@@ -1425,7 +1764,7 @@ function launchConfig(config) {
   } else {
     return;
   }
-  addColumn(cmdArgs, null, { cmd: cmd, title: config.name, cwd: cwd });
+  addColumn(cmdArgs, null, { cmd: cmd, title: config.name, cwd: cwd, env: env });
 }
 
 function refreshExplorer() {
@@ -1439,7 +1778,7 @@ function refreshExplorer() {
 
 btnToggleExplorer.addEventListener('click', toggleExplorer);
 document.getElementById('btn-refresh-files').addEventListener('click', refreshFileTree);
-document.getElementById('btn-refresh-git').addEventListener('click', refreshGitStatus);
+document.getElementById('btn-refresh-git').addEventListener('click', function () { refreshGitStatus(true); });
 document.getElementById('btn-refresh-run').addEventListener('click', refreshRunConfigs);
 document.getElementById('btn-git-commit').addEventListener('click', gitCommit);
 gitCommitMsg.addEventListener('keydown', function (e) {
@@ -1576,6 +1915,103 @@ claudeMdEditor.addEventListener('keydown', function (e) {
   if (e.key === 'Escape') {
     e.preventDefault();
     closeClaudeMdModal();
+  }
+  // Prevent shortcuts from bubbling to terminal
+  e.stopPropagation();
+});
+
+// ============================================================
+// File Editor Modal
+// ============================================================
+
+var fileEditorModal = document.getElementById('fileeditor-modal');
+var fileEditorEditor = document.getElementById('fileeditor-editor');
+var fileEditorFilename = document.getElementById('fileeditor-filename');
+var fileEditorPath = document.getElementById('fileeditor-path');
+var fileEditorClose = document.getElementById('fileeditor-close');
+var fileEditorSave = document.getElementById('fileeditor-save');
+var fileEditorStatus = document.getElementById('fileeditor-status');
+var fileEditorCurrentPath = null;
+var fileEditorOriginal = '';
+
+function openFileEditor(filePath) {
+  if (!window.electronAPI) return;
+
+  var name = filePath.replace(/\\/g, '/').split('/').pop();
+  fileEditorFilename.textContent = name;
+  fileEditorPath.textContent = filePath;
+  fileEditorStatus.textContent = 'Loading...';
+  fileEditorEditor.value = '';
+  fileEditorCurrentPath = filePath;
+  fileEditorModal.classList.remove('hidden');
+
+  window.electronAPI.readFile(filePath).then(function (result) {
+    if (result.error) {
+      fileEditorStatus.textContent = result.error;
+      fileEditorEditor.value = '';
+      fileEditorEditor.disabled = true;
+      fileEditorSave.disabled = true;
+    } else {
+      fileEditorEditor.value = result.content;
+      fileEditorOriginal = result.content;
+      fileEditorEditor.disabled = false;
+      fileEditorSave.disabled = false;
+      fileEditorStatus.textContent = '';
+    }
+  });
+}
+
+function closeFileEditor() {
+  if (fileEditorEditor.value !== fileEditorOriginal && fileEditorCurrentPath) {
+    if (!confirm('You have unsaved changes. Close anyway?')) return;
+  }
+  fileEditorModal.classList.add('hidden');
+  fileEditorCurrentPath = null;
+  fileEditorOriginal = '';
+}
+
+function saveFileEditor() {
+  if (!fileEditorCurrentPath || !window.electronAPI) return;
+
+  fileEditorStatus.textContent = 'Saving...';
+  window.electronAPI.writeFile(fileEditorCurrentPath, fileEditorEditor.value).then(function (result) {
+    if (result.success) {
+      fileEditorOriginal = fileEditorEditor.value;
+      fileEditorStatus.textContent = 'Saved';
+      setTimeout(function () {
+        if (fileEditorStatus.textContent === 'Saved') fileEditorStatus.textContent = '';
+      }, 2000);
+    } else {
+      fileEditorStatus.textContent = 'Error: ' + result.error;
+    }
+  });
+}
+
+fileEditorClose.addEventListener('click', closeFileEditor);
+fileEditorSave.addEventListener('click', saveFileEditor);
+
+fileEditorModal.addEventListener('click', function (e) {
+  if (e.target === fileEditorModal) closeFileEditor();
+});
+
+fileEditorEditor.addEventListener('keydown', function (e) {
+  // Ctrl+S to save
+  if (e.ctrlKey && e.key === 's') {
+    e.preventDefault();
+    saveFileEditor();
+  }
+  // Escape to close
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeFileEditor();
+  }
+  // Tab inserts spaces instead of changing focus
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    var start = fileEditorEditor.selectionStart;
+    var end = fileEditorEditor.selectionEnd;
+    fileEditorEditor.value = fileEditorEditor.value.substring(0, start) + '  ' + fileEditorEditor.value.substring(end);
+    fileEditorEditor.selectionStart = fileEditorEditor.selectionEnd = start + 2;
   }
   // Prevent shortcuts from bubbling to terminal
   e.stopPropagation();

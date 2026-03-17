@@ -244,6 +244,33 @@ ipcMain.handle('claudemd:save', (event, projectPath, content) => {
 
 // --- Explorer Panel IPC ---
 
+ipcMain.handle('fs:readFile', (event, filePath) => {
+  try {
+    const stats = fs.statSync(filePath);
+    if (stats.size > 2 * 1024 * 1024) {
+      return { error: 'File is too large to edit (>2MB)' };
+    }
+    const buf = fs.readFileSync(filePath);
+    // Check for binary content (null bytes in first 8KB)
+    const sample = buf.slice(0, 8192);
+    for (let i = 0; i < sample.length; i++) {
+      if (sample[i] === 0) return { error: 'Cannot edit binary files' };
+    }
+    return { content: buf.toString('utf8') };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('fs:writeFile', (event, filePath, content) => {
+  try {
+    fs.writeFileSync(filePath, content, 'utf8');
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle('fs:readDir', (event, dirPath) => {
   try {
     const entries = fs.readdirSync(dirPath, { withFileTypes: true });
@@ -320,9 +347,10 @@ ipcMain.handle('git:unstageAll', (event, projectPath) => {
   }
 });
 
-ipcMain.handle('git:commit', (event, projectPath, message) => {
+ipcMain.handle('git:commit', (event, projectPath, message, amend) => {
   try {
-    execFileSync('git', ['commit', '-m', message], { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
+    const args = amend ? ['commit', '--amend', '-m', message] : ['commit', '-m', message];
+    execFileSync('git', args, { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
     return { success: true };
   } catch (err) {
     return { success: false, error: (err.stderr || err.message).toString().trim() };
@@ -356,19 +384,163 @@ ipcMain.handle('git:discardFile', (event, projectPath, filePath) => {
   }
 });
 
-ipcMain.handle('launch:getConfigs', (event, projectPath) => {
-  const launchPath = path.join(projectPath, '.vscode', 'launch.json');
+ipcMain.handle('git:branches', (event, projectPath) => {
   try {
-    let content = fs.readFileSync(launchPath, 'utf8');
-    // Strip JSONC comments
-    content = content.replace(/\/\/.*$/gm, '');
-    content = content.replace(/\/\*[\s\S]*?\*\//g, '');
-    content = content.replace(/,\s*([\]}])/g, '$1');
-    const data = JSON.parse(content);
-    return data.configurations || [];
+    const output = execFileSync('git', ['branch', '--list', '--no-color'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 });
+    return output.trim().split('\n').filter(Boolean).map(line => ({
+      name: line.replace(/^\*?\s+/, ''),
+      isCurrent: line.startsWith('*')
+    }));
   } catch {
     return [];
   }
+});
+
+ipcMain.handle('git:checkout', (event, projectPath, branchName) => {
+  try {
+    execFileSync('git', ['checkout', branchName], { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: (err.stderr || err.message).toString().trim() };
+  }
+});
+
+ipcMain.handle('git:createBranch', (event, projectPath, branchName) => {
+  try {
+    execFileSync('git', ['checkout', '-b', branchName], { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: (err.stderr || err.message).toString().trim() };
+  }
+});
+
+ipcMain.handle('git:aheadBehind', (event, projectPath) => {
+  try {
+    const output = execFileSync('git', ['rev-list', '--count', '--left-right', 'HEAD...@{upstream}'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 });
+    const parts = output.trim().split(/\s+/);
+    return { ahead: parseInt(parts[0]) || 0, behind: parseInt(parts[1]) || 0 };
+  } catch {
+    return { ahead: 0, behind: 0 };
+  }
+});
+
+ipcMain.handle('git:diff', (event, projectPath, filePath, staged) => {
+  try {
+    const args = staged ? ['diff', '--cached', '--', filePath] : ['diff', '--', filePath];
+    return execFileSync('git', args, { cwd: projectPath, encoding: 'utf8', timeout: 5000 });
+  } catch (err) {
+    // For untracked files, show full content as additions
+    try {
+      const content = require('fs').readFileSync(require('path').join(projectPath, filePath), 'utf8');
+      return content.split('\n').map(line => '+' + line).join('\n');
+    } catch {
+      return '';
+    }
+  }
+});
+
+ipcMain.handle('git:log', (event, projectPath, count) => {
+  try {
+    const output = execFileSync('git', ['log', '--oneline', '-' + (count || 10), '--no-color'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 });
+    return output.trim().split('\n').filter(Boolean).map(line => {
+      const spaceIdx = line.indexOf(' ');
+      return { hash: line.substring(0, spaceIdx), message: line.substring(spaceIdx + 1) };
+    });
+  } catch {
+    return [];
+  }
+});
+
+ipcMain.handle('git:stashList', (event, projectPath) => {
+  try {
+    const output = execFileSync('git', ['stash', 'list', '--no-color'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 });
+    return output.trim().split('\n').filter(Boolean).map((line, i) => {
+      const match = line.match(/^stash@\{(\d+)\}:\s*(.*)$/);
+      return match ? { index: parseInt(match[1]), message: match[2] } : { index: i, message: line };
+    });
+  } catch {
+    return [];
+  }
+});
+
+ipcMain.handle('git:stashPush', (event, projectPath, message) => {
+  try {
+    const args = message ? ['stash', 'push', '-m', message] : ['stash', 'push'];
+    execFileSync('git', args, { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: (err.stderr || err.message).toString().trim() };
+  }
+});
+
+ipcMain.handle('git:stashPop', (event, projectPath) => {
+  try {
+    execFileSync('git', ['stash', 'pop'], { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: (err.stderr || err.message).toString().trim() };
+  }
+});
+
+function stripJsoncComments(text) {
+  // Match strings first (preserve them), then strip // and /* */ comments
+  return text.replace(/"(?:[^"\\]|\\.)*"|\/\/.*$|\/\*[\s\S]*?\*\//gm, function (match) {
+    if (match.startsWith('"')) return match;
+    return '';
+  });
+}
+
+function parseJsonc(filePath) {
+  let content = fs.readFileSync(filePath, 'utf8');
+  content = stripJsoncComments(content);
+  content = content.replace(/,\s*([\]}])/g, '$1');
+  return JSON.parse(content);
+}
+
+function findLaunchSettingsConfigs(projectPath) {
+  const configs = [];
+  function scanDir(dir) {
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === 'bin' || entry.name === 'obj') continue;
+        const subDir = path.join(dir, entry.name);
+        const lsPath = path.join(subDir, 'Properties', 'launchSettings.json');
+        try {
+          const data = JSON.parse(fs.readFileSync(lsPath, 'utf8'));
+          if (!data.profiles) continue;
+          for (const [name, profile] of Object.entries(data.profiles)) {
+            if (profile.commandName === 'IISExpress') continue;
+            configs.push({
+              name: name,
+              type: 'dotnet-project',
+              cwd: subDir,
+              env: profile.environmentVariables || {},
+              applicationUrl: profile.applicationUrl || '',
+              _source: 'launchSettings'
+            });
+          }
+        } catch { /* no launchSettings here, scan children */ }
+        // Recurse one more level (e.g. src/Project/Properties/...)
+        if (dir === projectPath) scanDir(subDir);
+      }
+    } catch { /* can't read dir */ }
+  }
+  scanDir(projectPath);
+  return configs;
+}
+
+ipcMain.handle('launch:getConfigs', (event, projectPath) => {
+  let configs = [];
+  // VS Code launch.json
+  const launchPath = path.join(projectPath, '.vscode', 'launch.json');
+  try {
+    const data = parseJsonc(launchPath);
+    configs = configs.concat(data.configurations || []);
+  } catch { /* no launch.json or parse error */ }
+  // .NET launchSettings.json
+  configs = configs.concat(findLaunchSettingsConfigs(projectPath));
+  return configs;
 });
 
 // --- Usage ---

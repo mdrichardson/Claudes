@@ -28,12 +28,15 @@ npm start      # Launches Electron app
 
 Use the `/release` slash command:
 ```
-/release 2.1.0
+/release           # patch bump (e.g. 2.0.0 -> 2.0.1)
+/release minor     # minor bump (e.g. 2.0.0 -> 2.1.0)
+/release major     # major bump (e.g. 2.0.0 -> 3.0.0)
+/release 2.1.0     # explicit version
 ```
 
 This commits all outstanding changes, then runs `release.sh` which bumps `package.json` version, tags, pushes, builds the NSIS installer, and creates a GitHub Release with the artifacts. Requires `gh` CLI to be authenticated. Installed apps auto-update from GitHub Releases via `electron-updater`.
 
-Can also be run manually: `./release.sh 2.1.0`
+Can also be run manually: `./release.sh [major|minor|patch|x.y.z]`
 
 ## UI Conventions
 

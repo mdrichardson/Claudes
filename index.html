@@ -36,6 +36,7 @@
           <div id="git-commit-area">
             <textarea id="git-commit-msg" placeholder="Commit message" rows="3"></textarea>
             <div class="git-commit-actions">
+              <label class="git-amend-label"><input type="checkbox" id="git-amend-checkbox"> Amend</label>
               <button id="btn-git-commit" class="git-commit-btn" title="Commit staged changes (Ctrl+Enter)">&#10003; Commit</button>
             </div>
             <div id="git-status-msg" class="git-status-msg"></div>
@@ -162,6 +163,24 @@
       </div>
     </div>
   </div>
+  <!-- File Editor Modal -->
+  <div id="fileeditor-modal" class="modal-overlay hidden">
+    <div class="modal-dialog fileeditor-dialog">
+      <div class="modal-header">
+        <span class="modal-title" id="fileeditor-filename"></span>
+        <span class="modal-subtitle" id="fileeditor-path"></span>
+        <span id="fileeditor-close" class="modal-close">&times;</span>
+      </div>
+      <div class="modal-body">
+        <textarea id="fileeditor-editor" spellcheck="false"></textarea>
+      </div>
+      <div class="modal-footer">
+        <span id="fileeditor-status" class="modal-status"></span>
+        <button id="fileeditor-save" class="modal-btn-save">Save</button>
+      </div>
+    </div>
+  </div>
+
   <script src="./node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="./node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="./renderer.js"></script>

@@ -35,7 +35,7 @@ wss.on('connection', (ws) => {
 
     switch (msg.type) {
       case 'create': {
-        const { id, cols, rows, cwd, args, cmd } = msg;
+        const { id, cols, rows, cwd, args, cmd, env } = msg;
 
         let p;
         try {
@@ -44,7 +44,7 @@ wss.on('connection', (ws) => {
             cols: cols || 120,
             rows: rows || 30,
             cwd: cwd || process.cwd(),
-            env: { ...process.env }
+            env: env ? { ...process.env, ...env } : { ...process.env }
           });
         } catch (err) {
           console.error('Failed to spawn pty:', err.message);
