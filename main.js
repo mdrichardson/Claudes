@@ -294,7 +294,7 @@ ipcMain.handle('fs:readDir', (event, dirPath) => {
 ipcMain.handle('git:status', (event, projectPath) => {
   try {
     const output = execFileSync('git', ['status', '--porcelain'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 });
-    return output.trim().split('\n').filter(Boolean).map(line => ({
+    return output.replace(/\s+$/, '').split('\n').filter(Boolean).map(line => ({
       status: line.substring(0, 2),
       file: line.substring(3)
     }));

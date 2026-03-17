@@ -2140,6 +2140,151 @@ function renderUsageSummary(data) {
   container.appendChild(buildUsageCard('Sessions', String(data.length), projectSet.size + ' projects'));
 
   renderBarChart('usage-chart-30d', data, 30);
+  renderEnvironmentalImpact(totalInput, totalOutput, totalCacheRead);
+}
+
+function renderEnvironmentalImpact(totalInput, totalOutput, totalCacheRead) {
+  // Energy estimates (Wh per million tokens) — based on published LLM inference research
+  var WH_PER_M_INPUT = 1.0;
+  var WH_PER_M_OUTPUT = 5.0;
+  var WH_PER_M_CACHE = 0.2;
+  // Carbon intensity: Google Cloud average (kg CO2 per kWh)
+  var KG_CO2_PER_KWH = 0.12;
+
+  var energyWh = (totalInput / 1e6) * WH_PER_M_INPUT
+               + (totalOutput / 1e6) * WH_PER_M_OUTPUT
+               + (totalCacheRead / 1e6) * WH_PER_M_CACHE;
+  var energyKwh = energyWh / 1000;
+  var co2Kg = energyKwh * KG_CO2_PER_KWH;
+  var co2G = co2Kg * 1000;
+
+  // Format energy
+  var energyStr, energyUnit;
+  if (energyWh < 1) {
+    energyStr = (energyWh * 1000).toFixed(1);
+    energyUnit = 'mWh';
+  } else if (energyWh < 1000) {
+    energyStr = energyWh.toFixed(1);
+    energyUnit = 'Wh';
+  } else {
+    energyStr = energyKwh.toFixed(2);
+    energyUnit = 'kWh';
+  }
+
+  // Format CO2
+  var co2Str, co2Unit;
+  if (co2G < 1) {
+    co2Str = (co2G * 1000).toFixed(1);
+    co2Unit = 'mg';
+  } else if (co2G < 1000) {
+    co2Str = co2G.toFixed(1);
+    co2Unit = 'g';
+  } else {
+    co2Str = co2Kg.toFixed(2);
+    co2Unit = 'kg';
+  }
+
+  // Real-world equivalents (sorted small to large by CO2 in grams)
+  var equivalents = [
+    { icon: '\uD83D\uDD0D', g: 0.3,   unit: 'Google searches' },
+    { icon: '\uD83D\uDCA1', g: 1.2,   unit: 'hours of an LED bulb' },
+    { icon: '\uD83D\uDCF1', g: 0.96,  unit: 'phone charges' },
+    { icon: '\uD83C\uDF75', g: 15,    unit: 'cups of tea (boiling the kettle)' },
+    { icon: '\uD83C\uDFAC', g: 36,    unit: 'hours of Netflix streaming' },
+    { icon: '\uD83D\uDEC1', g: 500,   unit: '5-minute hot showers' },
+    { icon: '\uD83D\uDE97', g: 404,   unit: 'miles driven in a car' },
+    { icon: '\u2708\uFE0F', g: 255000, unit: 'London\u2013NYC flights' }
+  ];
+
+  // Pick the best equivalent (aim for a count between 1 and 200)
+  var best = null;
+  var bestCount = 0;
+  for (var i = 0; i < equivalents.length; i++) {
+    var count = co2G / equivalents[i].g;
+    if (count >= 0.3 && (best === null || (count >= 1 && count <= 200))) {
+      best = equivalents[i];
+      bestCount = count;
+    }
+  }
+  if (!best) {
+    best = equivalents[0];
+    bestCount = co2G / best.g;
+  }
+
+  var countStr;
+  if (bestCount < 0.01) countStr = '< 0.01';
+  else if (bestCount < 1) countStr = bestCount.toFixed(2);
+  else if (bestCount < 10) countStr = bestCount.toFixed(1);
+  else countStr = Math.round(bestCount).toLocaleString();
+
+  var container = document.getElementById('usage-environmental');
+  container.textContent = '';
+
+  // Header
+  var header = document.createElement('div');
+  header.className = 'usage-env-header';
+  var headerIcon = document.createElement('span');
+  headerIcon.className = 'usage-env-icon';
+  headerIcon.textContent = '\uD83C\uDF0D';
+  var headerTitle = document.createElement('span');
+  headerTitle.className = 'usage-env-title';
+  headerTitle.textContent = 'Environmental Impact (estimated)';
+  header.appendChild(headerIcon);
+  header.appendChild(headerTitle);
+  container.appendChild(header);
+
+  // Stats grid
+  var grid = document.createElement('div');
+  grid.className = 'usage-env-grid';
+
+  function buildEnvStat(label, val, unit, sub) {
+    var stat = document.createElement('div');
+    stat.className = 'usage-env-stat';
+    var lbl = document.createElement('span');
+    lbl.className = 'usage-env-stat-label';
+    lbl.textContent = label;
+    var valEl = document.createElement('span');
+    valEl.className = 'usage-env-stat-value';
+    valEl.textContent = val + ' ';
+    var unitEl = document.createElement('span');
+    unitEl.style.fontSize = '12px';
+    unitEl.style.fontWeight = '400';
+    unitEl.textContent = unit;
+    valEl.appendChild(unitEl);
+    var subEl = document.createElement('span');
+    subEl.className = 'usage-env-stat-sub';
+    subEl.textContent = sub;
+    stat.appendChild(lbl);
+    stat.appendChild(valEl);
+    stat.appendChild(subEl);
+    return stat;
+  }
+
+  grid.appendChild(buildEnvStat('Energy Used', energyStr, energyUnit, 'inference compute'));
+  grid.appendChild(buildEnvStat('CO\u2082 Emissions', co2Str, co2Unit, 'at cloud carbon intensity'));
+  container.appendChild(grid);
+
+  // Equivalent
+  var equiv = document.createElement('div');
+  equiv.className = 'usage-env-equivalent';
+  var eqIcon = document.createElement('span');
+  eqIcon.className = 'usage-env-equiv-icon';
+  eqIcon.textContent = best.icon;
+  var eqText = document.createElement('span');
+  eqText.className = 'usage-env-equiv-text';
+  eqText.textContent = "That's about the same as ";
+  var eqBold = document.createElement('strong');
+  eqBold.textContent = countStr + ' ' + best.unit;
+  eqText.appendChild(eqBold);
+  equiv.appendChild(eqIcon);
+  equiv.appendChild(eqText);
+  container.appendChild(equiv);
+
+  // Disclaimer
+  var disc = document.createElement('div');
+  disc.className = 'usage-env-disclaimer';
+  disc.textContent = 'Estimates based on published LLM inference energy research. Actual values depend on hardware, model, batch size, and data centre efficiency.';
+  container.appendChild(disc);
 }
 
 function renderBarChart(containerId, data, days) {

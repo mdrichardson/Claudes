@@ -1528,6 +1528,97 @@ html, body {
   margin-top: 4px;
 }
 
+/* Environmental impact */
+
+.usage-environmental {
+  background: #0d1117;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 16px 18px;
+  margin-bottom: 20px;
+}
+
+.usage-env-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.usage-env-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.usage-env-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #aaa;
+}
+
+.usage-env-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.usage-env-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.usage-env-stat-label {
+  font-size: 10px;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.usage-env-stat-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: #4ade80;
+}
+
+.usage-env-stat-sub {
+  font-size: 10px;
+  color: #555;
+}
+
+.usage-env-equivalent {
+  background: #111827;
+  border-radius: 4px;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.usage-env-equiv-icon {
+  font-size: 22px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.usage-env-equiv-text {
+  font-size: 12px;
+  color: #9ca3af;
+  line-height: 1.4;
+}
+
+.usage-env-equiv-text strong {
+  color: #e0e0e0;
+}
+
+.usage-env-disclaimer {
+  font-size: 9px;
+  color: #444;
+  margin-top: 10px;
+  font-style: italic;
+}
+
 /* Chart */
 
 .usage-chart-container {
