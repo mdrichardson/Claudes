@@ -2,18 +2,63 @@
   "name": "claudes",
   "version": "2.0.0",
   "description": "Multi-column Claude Code terminal desktop app",
+  "author": "The Code Guy",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "pty-server": "node pty-server.js"
+    "pty-server": "node pty-server.js",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:publish": "electron-builder --win --publish always"
   },
   "dependencies": {
-    "@xterm/xterm": "^6.0.0",
     "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "electron-updater": "^6.8.3",
     "node-pty": "^1.1.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "electron": "^41.0.2"
+    "electron": "^41.0.2",
+    "electron-builder": "^26.8.1"
+  },
+  "build": {
+    "appId": "com.thecodeguy.claudes",
+    "productName": "Claudes",
+    "npmRebuild": false,
+    "asar": true,
+    "asarUnpack": [
+      "pty-server.js",
+      "node_modules/node-pty/**/*",
+      "node_modules/ws/**/*"
+    ],
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer.js",
+      "index.html",
+      "styles.css",
+      "pty-server.js",
+      "icon.ico",
+      "icon.png",
+      "claude-icon.png",
+      "claude-small.png",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "paulallington",
+      "repo": "Claudes"
+    }
   }
 }

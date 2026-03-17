@@ -13,12 +13,54 @@
       <div id="project-list"></div>
       <button id="btn-add-project">+ Add Project</button>
     </div>
+    <div id="explorer-panel">
+      <div class="explorer-tabs">
+        <button class="explorer-tab active" data-tab="files">Files</button>
+        <button class="explorer-tab" data-tab="git">Git</button>
+        <button class="explorer-tab" data-tab="run">Run</button>
+      </div>
+      <div class="explorer-content">
+        <div id="tab-files" class="tab-content active">
+          <div class="explorer-section-header">
+            <span>EXPLORER</span>
+            <button class="explorer-refresh" id="btn-refresh-files" title="Refresh">&#8635;</button>
+          </div>
+          <div id="file-tree"></div>
+        </div>
+        <div id="tab-git" class="tab-content">
+          <div class="explorer-section-header">
+            <span>SOURCE CONTROL</span>
+            <button class="explorer-refresh" id="btn-refresh-git" title="Refresh">&#8635;</button>
+          </div>
+          <div id="git-header"></div>
+          <div id="git-commit-area">
+            <textarea id="git-commit-msg" placeholder="Commit message" rows="3"></textarea>
+            <div class="git-commit-actions">
+              <button id="btn-git-commit" class="git-commit-btn" title="Commit staged changes (Ctrl+Enter)">&#10003; Commit</button>
+            </div>
+            <div id="git-status-msg" class="git-status-msg"></div>
+          </div>
+          <div id="git-changes"></div>
+        </div>
+        <div id="tab-run" class="tab-content">
+          <div class="explorer-section-header">
+            <span>RUN AND DEBUG</span>
+            <button class="explorer-refresh" id="btn-refresh-run" title="Refresh">&#8635;</button>
+          </div>
+          <div id="run-configs"></div>
+        </div>
+      </div>
+    </div>
+    <div id="explorer-resize-handle"></div>
     <div id="main-area">
       <div id="toolbar">
         <div class="toolbar-left">
           <button id="btn-toggle-sidebar" title="Toggle sidebar">&#9776;</button>
+          <button id="btn-toggle-explorer" title="Toggle Explorer (Ctrl+Shift+E)">&#9783;</button>
           <span class="app-title">Claudes</span>
           <span id="active-project-name" class="active-project-name"></span>
+          <button id="btn-claude-md" class="btn-claude-md" title="Manage project memory (CLAUDE.md)">CLAUDE.md</button>
+          <button id="btn-usage" class="btn-usage" title="View Claude usage">Usage</button>
         </div>
         <div class="toolbar-actions">
           <div class="spawn-split-btn">
@@ -50,6 +92,74 @@
         </div>
       </div>
       <div id="columns-container"></div>
+    </div>
+  </div>
+
+  <!-- Update notification -->
+  <div id="update-bar" class="update-bar hidden">
+    <span id="update-message"></span>
+    <button id="update-action" class="update-btn">Restart &amp; Update</button>
+    <button id="update-dismiss" class="update-dismiss">&times;</button>
+  </div>
+
+  <!-- Usage Modal -->
+  <div id="usage-modal" class="modal-overlay hidden">
+    <div class="modal-dialog usage-dialog">
+      <div class="modal-header">
+        <span class="modal-title">Usage</span>
+        <span class="modal-subtitle" id="usage-subtitle"></span>
+        <span id="usage-close" class="modal-close">&times;</span>
+      </div>
+      <div class="modal-body usage-body">
+        <div id="usage-loading" class="usage-loading">Loading usage data...</div>
+        <div id="usage-content" class="usage-content hidden">
+          <div class="usage-tabs">
+            <button class="usage-tab active" data-usage-tab="summary">Summary</button>
+            <button class="usage-tab" data-usage-tab="daily">Daily</button>
+            <button class="usage-tab" data-usage-tab="sessions">Sessions</button>
+          </div>
+          <div id="usage-tab-summary" class="usage-tab-content active">
+            <div class="usage-summary-cards" id="usage-summary-cards"></div>
+            <div class="usage-chart-container">
+              <h3 class="usage-section-title">Last 30 Days</h3>
+              <div class="usage-chart" id="usage-chart-30d"></div>
+            </div>
+          </div>
+          <div id="usage-tab-daily" class="usage-tab-content">
+            <div class="usage-chart-container">
+              <h3 class="usage-section-title">Daily Token Usage</h3>
+              <div class="usage-chart" id="usage-chart-daily"></div>
+            </div>
+            <div class="usage-table-container" id="usage-daily-table"></div>
+          </div>
+          <div id="usage-tab-sessions" class="usage-tab-content">
+            <div class="usage-filter-row">
+              <select id="usage-project-filter">
+                <option value="">All Projects</option>
+              </select>
+            </div>
+            <div class="usage-table-container" id="usage-sessions-table"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CLAUDE.md Modal -->
+  <div id="claudemd-modal" class="modal-overlay hidden">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <span class="modal-title">CLAUDE.md</span>
+        <span class="modal-subtitle" id="claudemd-path"></span>
+        <span id="claudemd-close" class="modal-close">&times;</span>
+      </div>
+      <div class="modal-body">
+        <textarea id="claudemd-editor" spellcheck="false" placeholder="# Project instructions for Claude&#10;&#10;Add conventions, architecture notes, and preferences here..."></textarea>
+      </div>
+      <div class="modal-footer">
+        <span id="claudemd-status" class="modal-status"></span>
+        <button id="claudemd-save" class="modal-btn-save">Save</button>
+      </div>
     </div>
   </div>
   <script src="./node_modules/@xterm/xterm/lib/xterm.js"></script>

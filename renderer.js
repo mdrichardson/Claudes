@@ -9,6 +9,14 @@ var projectListEl = document.getElementById('project-list');
 var activeProjectNameEl = document.getElementById('active-project-name');
 var sidebar = document.getElementById('sidebar');
 
+var btnClaudeMd = document.getElementById('btn-claude-md');
+var claudeMdModal = document.getElementById('claudemd-modal');
+var claudeMdEditor = document.getElementById('claudemd-editor');
+var claudeMdPath = document.getElementById('claudemd-path');
+var claudeMdClose = document.getElementById('claudemd-close');
+var claudeMdSave = document.getElementById('claudemd-save');
+var claudeMdStatus = document.getElementById('claudemd-status');
+
 var btnAddOptions = document.getElementById('btn-add-options');
 var spawnDropdown = document.getElementById('spawn-dropdown');
 var optSkipPermissions = document.getElementById('opt-skip-permissions');
@@ -287,6 +295,8 @@ function setActiveProject(index, isStartup) {
   if (prevKey && prevKey !== newKey) {
     var prevState = projectStates.get(prevKey);
     if (prevState) prevState.containerEl.style.display = 'none';
+    var commitInput = document.getElementById('git-commit-msg');
+    if (commitInput) commitInput.value = '';
   }
 
   config.activeProjectIndex = index;
@@ -300,6 +310,7 @@ function setActiveProject(index, isStartup) {
 
   var state = getOrCreateProjectState(newKey);
   state.containerEl.style.display = 'flex';
+  refreshExplorer();
 
   if (state.columns.size === 0) {
     if (isStartup && window.electronAPI) {
@@ -401,12 +412,15 @@ function showEmptyState() {
 // DOM helpers
 // ============================================================
 
-function createColumnHeader(id) {
+function createColumnHeader(id, customTitle) {
   var header = document.createElement('div');
   header.className = 'column-header';
   var title = document.createElement('span');
   title.className = 'col-title';
-  title.textContent = 'Claude #' + id;
+  title.textContent = customTitle || ('Claude #' + id);
+  title.addEventListener('dblclick', function () {
+    startTitleEdit(id, title);
+  });
   var closeBtn = document.createElement('span');
   closeBtn.className = 'col-close';
   closeBtn.dataset.id = String(id);
@@ -417,23 +431,62 @@ function createColumnHeader(id) {
   return header;
 }
 
+function startTitleEdit(id, titleEl) {
+  if (titleEl.contentEditable === 'true') return;
+  titleEl.contentEditable = 'true';
+  titleEl.classList.add('editing');
+  titleEl.focus();
+  var range = document.createRange();
+  range.selectNodeContents(titleEl);
+  var sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+
+  function finishEdit() {
+    titleEl.contentEditable = 'false';
+    titleEl.classList.remove('editing');
+    var newTitle = titleEl.textContent.trim();
+    var col = allColumns.get(id);
+    if (col) {
+      col.customTitle = newTitle || null;
+      if (!newTitle) titleEl.textContent = 'Claude #' + id;
+      persistSessions(col.projectKey);
+    }
+  }
+  titleEl.addEventListener('blur', finishEdit, { once: true });
+  titleEl.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); titleEl.blur(); }
+    if (e.key === 'Escape') {
+      var col = allColumns.get(id);
+      titleEl.textContent = (col && col.customTitle) || ('Claude #' + id);
+      titleEl.blur();
+    }
+  });
+}
+
 function createExitOverlay(id, exitCode, col) {
   var overlay = document.createElement('div');
   overlay.className = 'exit-overlay';
   var msg = document.createElement('div');
-  msg.textContent = 'Claude exited (code ' + exitCode + ')';
+  msg.textContent = (col.cmd || 'Claude') + ' exited (code ' + exitCode + ')';
   var restartBtn = document.createElement('button');
   restartBtn.className = 'restart-btn';
-  restartBtn.textContent = 'Respawn';
+  restartBtn.textContent = col.cmd ? 'Restart' : 'Respawn';
   var closeBtn = document.createElement('button');
   closeBtn.className = 'close-btn';
-  closeBtn.textContent = 'Kill';
+  closeBtn.textContent = 'Close';
 
   restartBtn.addEventListener('click', function () {
     overlay.remove();
     col.fitAddon.fit();
-    var resumeArgs = col.sessionId ? ['--resume', col.sessionId] : [];
-    wsSend({ type: 'create', id: id, cols: col.terminal.cols, rows: col.terminal.rows, cwd: col.cwd, args: resumeArgs });
+    var sendMsg = { type: 'create', id: id, cols: col.terminal.cols, rows: col.terminal.rows, cwd: col.cwd };
+    if (col.cmd) {
+      sendMsg.cmd = col.cmd;
+      sendMsg.args = col.cmdArgs || [];
+    } else {
+      sendMsg.args = col.sessionId ? ['--resume', col.sessionId] : [];
+    }
+    wsSend(sendMsg);
     col.terminal.clear();
   });
   closeBtn.addEventListener('click', function () { removeColumn(id); });
@@ -448,7 +501,8 @@ function createExitOverlay(id, exitCode, col) {
 // Column Management
 // ============================================================
 
-function addColumn(args, targetRow) {
+function addColumn(args, targetRow, opts) {
+  opts = opts || {};
   if (!activeProjectKey) return;
 
   var state = getActiveState();
@@ -477,7 +531,7 @@ function addColumn(args, targetRow) {
   col.className = 'column';
   col.dataset.id = String(id);
 
-  var header = createColumnHeader(id);
+  var header = createColumnHeader(id, opts.title);
   var termWrapper = document.createElement('div');
   termWrapper.className = 'terminal-wrapper';
 
@@ -497,18 +551,21 @@ function addColumn(args, targetRow) {
   terminal.loadAddon(fitAddon);
   terminal.open(termWrapper);
 
-  var cwd = activeProjectKey;
+  var cwd = opts.cwd || activeProjectKey;
   var claudeArgs = args || [];
+  var cmd = opts.cmd || null;
 
-  var preSpawnSessionsPromise = window.electronAPI
+  var preSpawnSessionsPromise = (!cmd && window.electronAPI)
     ? window.electronAPI.getRecentSessions(cwd)
     : Promise.resolve([]);
 
   requestAnimationFrame(function () {
     fitAddon.fit();
-    wsSend({ type: 'create', id: id, cols: terminal.cols, rows: terminal.rows, cwd: cwd, args: claudeArgs });
+    var sendMsg = { type: 'create', id: id, cols: terminal.cols, rows: terminal.rows, cwd: cwd, args: claudeArgs };
+    if (cmd) sendMsg.cmd = cmd;
+    wsSend(sendMsg);
 
-    if (window.electronAPI) {
+    if (!cmd && window.electronAPI) {
       preSpawnSessionsPromise.then(function (preSessions) {
         var preIds = {};
         for (var i = 0; i < preSessions.length; i++) {
@@ -538,7 +595,10 @@ function addColumn(args, targetRow) {
     headerEl: header,
     cwd: cwd,
     projectKey: activeProjectKey,
-    sessionId: null
+    sessionId: null,
+    customTitle: opts.title || null,
+    cmd: cmd,
+    cmdArgs: claudeArgs
   };
 
   row.columnIds.push(id);
@@ -559,6 +619,21 @@ function addRow() {
   addColumn(null, row);
 }
 
+function fetchAndSetSessionTitle(columnId, projectPath, sessionId) {
+  if (!window.electronAPI || !window.electronAPI.getSessionTitle) return;
+  var col = allColumns.get(columnId);
+  if (!col || col.customTitle) return; // don't override manual rename
+  window.electronAPI.getSessionTitle(projectPath, sessionId).then(function (title) {
+    if (!title) return;
+    var col2 = allColumns.get(columnId);
+    if (!col2 || col2.customTitle) return;
+    col2.customTitle = title;
+    var titleEl = col2.headerEl.querySelector('.col-title');
+    if (titleEl) titleEl.textContent = title;
+    persistSessions(col2.projectKey);
+  });
+}
+
 // Detect which session ID was created by a newly spawned Claude
 function detectSession(columnId, projectPath, preExistingIds, attempt) {
   if (attempt > 15) return;
@@ -570,6 +645,7 @@ function detectSession(columnId, projectPath, preExistingIds, attempt) {
           if (col) {
             col.sessionId = sessions[i].sessionId;
             persistSessions(col.projectKey);
+            fetchAndSetSessionTitle(columnId, projectPath, sessions[i].sessionId);
           }
           return;
         }
@@ -579,6 +655,7 @@ function detectSession(columnId, projectPath, preExistingIds, attempt) {
         if (col2 && !col2.sessionId) {
           col2.sessionId = sessions[0].sessionId;
           persistSessions(col2.projectKey);
+          fetchAndSetSessionTitle(columnId, projectPath, sessions[0].sessionId);
           return;
         }
       }
@@ -867,6 +944,11 @@ document.addEventListener('keydown', function (e) {
     toggleSidebar();
     return;
   }
+  if (e.ctrlKey && e.shiftKey && e.key === 'E') {
+    e.preventDefault();
+    toggleExplorer();
+    return;
+  }
 });
 
 // ============================================================
@@ -877,6 +959,479 @@ function toggleSidebar() {
   sidebar.classList.toggle('collapsed');
   setTimeout(refitAll, 250);
 }
+
+// ============================================================
+// Explorer Panel
+// ============================================================
+
+var explorerPanel = document.getElementById('explorer-panel');
+var explorerResizeHandle = document.getElementById('explorer-resize-handle');
+var btnToggleExplorer = document.getElementById('btn-toggle-explorer');
+var fileTreeEl = document.getElementById('file-tree');
+var gitChangesEl = document.getElementById('git-changes');
+var gitHeaderEl = document.getElementById('git-header');
+var runConfigsEl = document.getElementById('run-configs');
+
+// Tab switching
+document.querySelectorAll('.explorer-tab').forEach(function (tab) {
+  tab.addEventListener('click', function () {
+    var tabName = tab.dataset.tab;
+    document.querySelectorAll('.explorer-tab').forEach(function (t) { t.classList.remove('active'); });
+    document.querySelectorAll('.tab-content').forEach(function (tc) { tc.classList.remove('active'); });
+    tab.classList.add('active');
+    document.getElementById('tab-' + tabName).classList.add('active');
+    if (tabName === 'files') refreshFileTree();
+    if (tabName === 'git') refreshGitStatus();
+    if (tabName === 'run') refreshRunConfigs();
+  });
+});
+
+function toggleExplorer() {
+  explorerPanel.classList.toggle('collapsed');
+  explorerResizeHandle.classList.toggle('hidden');
+  setTimeout(refitAll, 200);
+}
+
+// Explorer resize handle
+(function () {
+  explorerResizeHandle.addEventListener('mousedown', function (e) {
+    e.preventDefault();
+    explorerResizeHandle.classList.add('active');
+    var startX = e.clientX;
+    var startWidth = explorerPanel.getBoundingClientRect().width;
+    function onMouseMove(ev) {
+      var delta = ev.clientX - startX;
+      var newWidth = Math.max(150, Math.min(600, startWidth + delta));
+      explorerPanel.style.width = newWidth + 'px';
+      refitAll();
+    }
+    function onMouseUp() {
+      explorerResizeHandle.classList.remove('active');
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    }
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
+})();
+
+// ============================================================
+// File Tree
+// ============================================================
+
+function refreshFileTree() {
+  if (!activeProjectKey || !window.electronAPI) return;
+  while (fileTreeEl.firstChild) fileTreeEl.removeChild(fileTreeEl.firstChild);
+  window.electronAPI.readDir(activeProjectKey).then(function (entries) {
+    for (var i = 0; i < entries.length; i++) {
+      fileTreeEl.appendChild(createTreeItem(entries[i], 0));
+    }
+  });
+}
+
+function createTreeItem(entry, level) {
+  var item = document.createElement('div');
+  item.className = 'tree-item';
+  var row = document.createElement('div');
+  row.className = 'tree-row';
+  row.style.paddingLeft = (8 + level * 16) + 'px';
+
+  var arrow = document.createElement('span');
+  arrow.className = 'tree-arrow';
+  arrow.textContent = entry.isDirectory ? '\u25B8' : '';
+
+  var name = document.createElement('span');
+  name.className = 'tree-name';
+  if (entry.isDirectory) name.classList.add('tree-folder');
+  name.textContent = entry.name;
+
+  row.appendChild(arrow);
+  row.appendChild(name);
+  item.appendChild(row);
+
+  if (entry.isDirectory) {
+    var children = document.createElement('div');
+    children.className = 'tree-children';
+    children.style.display = 'none';
+    item.appendChild(children);
+
+    var loaded = false;
+    row.addEventListener('click', function () {
+      var isExpanded = children.style.display !== 'none';
+      if (isExpanded) {
+        children.style.display = 'none';
+        arrow.textContent = '\u25B8';
+      } else {
+        if (!loaded) {
+          loaded = true;
+          window.electronAPI.readDir(entry.path).then(function (childEntries) {
+            for (var j = 0; j < childEntries.length; j++) {
+              children.appendChild(createTreeItem(childEntries[j], level + 1));
+            }
+          });
+        }
+        children.style.display = 'block';
+        arrow.textContent = '\u25BE';
+      }
+    });
+  }
+
+  return item;
+}
+
+// ============================================================
+// Git Status
+// ============================================================
+
+var gitCommitMsg = document.getElementById('git-commit-msg');
+var gitStatusMsgEl = document.getElementById('git-status-msg');
+
+function refreshGitStatus() {
+  if (!activeProjectKey || !window.electronAPI) return;
+  while (gitHeaderEl.firstChild) gitHeaderEl.removeChild(gitHeaderEl.firstChild);
+  while (gitChangesEl.firstChild) gitChangesEl.removeChild(gitChangesEl.firstChild);
+
+  // Branch + pull/push buttons
+  window.electronAPI.gitBranch(activeProjectKey).then(function (branch) {
+    var row = document.createElement('div');
+    row.className = 'git-branch-row';
+
+    var branchLabel = document.createElement('span');
+    branchLabel.className = 'git-branch-name';
+    branchLabel.textContent = '\u2387 ' + (branch || 'detached');
+    row.appendChild(branchLabel);
+
+    var actions = document.createElement('span');
+    actions.className = 'git-branch-actions';
+
+    var pullBtn = document.createElement('button');
+    pullBtn.className = 'git-action-btn';
+    pullBtn.textContent = '\u2193 Pull';
+    pullBtn.title = 'Pull';
+    pullBtn.addEventListener('click', function () { gitPull(); });
+
+    var pushBtn = document.createElement('button');
+    pushBtn.className = 'git-action-btn';
+    pushBtn.textContent = '\u2191 Push';
+    pushBtn.title = 'Push';
+    pushBtn.addEventListener('click', function () { gitPush(); });
+
+    actions.appendChild(pullBtn);
+    actions.appendChild(pushBtn);
+    row.appendChild(actions);
+    gitHeaderEl.appendChild(row);
+  });
+
+  // Parse status into staged vs unstaged
+  window.electronAPI.gitStatus(activeProjectKey).then(function (files) {
+    var staged = [];
+    var changes = [];
+
+    for (var i = 0; i < files.length; i++) {
+      var x = files[i].status.charAt(0);
+      var y = files[i].status.charAt(1);
+      var file = files[i].file;
+
+      if (x !== ' ' && x !== '?') {
+        staged.push({ status: x, file: file });
+      }
+      if (x === '?') {
+        changes.push({ status: '?', file: file, untracked: true });
+      } else if (y !== ' ') {
+        changes.push({ status: y, file: file, untracked: false });
+      }
+    }
+
+    if (staged.length === 0 && changes.length === 0) {
+      var empty = document.createElement('div');
+      empty.className = 'git-empty';
+      empty.textContent = 'No changes';
+      gitChangesEl.appendChild(empty);
+      return;
+    }
+
+    if (staged.length > 0) {
+      gitChangesEl.appendChild(createGitSection('Staged Changes', staged, true));
+    }
+    if (changes.length > 0) {
+      gitChangesEl.appendChild(createGitSection('Changes', changes, false));
+    }
+  });
+}
+
+function createGitSection(title, files, isStaged) {
+  var section = document.createElement('div');
+  section.className = 'git-section';
+
+  var header = document.createElement('div');
+  header.className = 'git-section-header';
+
+  var arrow = document.createElement('span');
+  arrow.className = 'git-section-arrow';
+  arrow.textContent = '\u25BE';
+
+  var label = document.createElement('span');
+  label.className = 'git-section-label';
+  label.textContent = title + ' (' + files.length + ')';
+
+  var actions = document.createElement('span');
+  actions.className = 'git-section-actions';
+
+  if (isStaged) {
+    var unstageAllBtn = document.createElement('button');
+    unstageAllBtn.className = 'git-file-action';
+    unstageAllBtn.textContent = '\u2212';
+    unstageAllBtn.title = 'Unstage All';
+    unstageAllBtn.addEventListener('click', function (e) { e.stopPropagation(); gitUnstageAll(); });
+    actions.appendChild(unstageAllBtn);
+  } else {
+    var stageAllBtn = document.createElement('button');
+    stageAllBtn.className = 'git-file-action';
+    stageAllBtn.textContent = '+';
+    stageAllBtn.title = 'Stage All';
+    stageAllBtn.addEventListener('click', function (e) { e.stopPropagation(); gitStageAll(); });
+    actions.appendChild(stageAllBtn);
+  }
+
+  header.appendChild(arrow);
+  header.appendChild(label);
+  header.appendChild(actions);
+  section.appendChild(header);
+
+  var list = document.createElement('div');
+  list.className = 'git-section-list';
+
+  for (var i = 0; i < files.length; i++) {
+    list.appendChild(createGitFileRow(files[i], isStaged));
+  }
+  section.appendChild(list);
+
+  header.addEventListener('click', function () {
+    var collapsed = list.style.display === 'none';
+    list.style.display = collapsed ? 'block' : 'none';
+    arrow.textContent = collapsed ? '\u25BE' : '\u25B8';
+  });
+
+  return section;
+}
+
+function createGitFileRow(file, isStaged) {
+  var row = document.createElement('div');
+  row.className = 'git-file';
+
+  var statusEl = document.createElement('span');
+  statusEl.className = 'git-status git-status-' + gitStatusClass(file.status);
+  statusEl.textContent = file.status;
+
+  var nameEl = document.createElement('span');
+  nameEl.className = 'git-filename';
+  nameEl.textContent = file.file;
+
+  var actions = document.createElement('span');
+  actions.className = 'git-file-actions';
+
+  if (isStaged) {
+    var unstageBtn = document.createElement('button');
+    unstageBtn.className = 'git-file-action';
+    unstageBtn.textContent = '\u2212';
+    unstageBtn.title = 'Unstage';
+    unstageBtn.addEventListener('click', function (e) { e.stopPropagation(); gitUnstageFile(file.file); });
+    actions.appendChild(unstageBtn);
+  } else {
+    var stageBtn = document.createElement('button');
+    stageBtn.className = 'git-file-action';
+    stageBtn.textContent = '+';
+    stageBtn.title = 'Stage';
+    stageBtn.addEventListener('click', function (e) { e.stopPropagation(); gitStageFile(file.file); });
+    actions.appendChild(stageBtn);
+
+    if (!file.untracked) {
+      var discardBtn = document.createElement('button');
+      discardBtn.className = 'git-file-action git-discard';
+      discardBtn.textContent = '\u21A9';
+      discardBtn.title = 'Discard Changes';
+      discardBtn.addEventListener('click', function (e) { e.stopPropagation(); gitDiscardFile(file.file); });
+      actions.appendChild(discardBtn);
+    }
+  }
+
+  row.appendChild(statusEl);
+  row.appendChild(nameEl);
+  row.appendChild(actions);
+  return row;
+}
+
+function gitStatusClass(status) {
+  if (status === '?' || status === 'A') return 'added';
+  if (status === 'D') return 'deleted';
+  if (status === 'R') return 'renamed';
+  return 'modified';
+}
+
+function gitStageFile(filePath) {
+  if (!activeProjectKey || !window.electronAPI) return;
+  window.electronAPI.gitStageFile(activeProjectKey, filePath).then(function () { refreshGitStatus(); });
+}
+
+function gitUnstageFile(filePath) {
+  if (!activeProjectKey || !window.electronAPI) return;
+  window.electronAPI.gitUnstageFile(activeProjectKey, filePath).then(function () { refreshGitStatus(); });
+}
+
+function gitStageAll() {
+  if (!activeProjectKey || !window.electronAPI) return;
+  window.electronAPI.gitStageAll(activeProjectKey).then(function () { refreshGitStatus(); });
+}
+
+function gitUnstageAll() {
+  if (!activeProjectKey || !window.electronAPI) return;
+  window.electronAPI.gitUnstageAll(activeProjectKey).then(function () { refreshGitStatus(); });
+}
+
+function gitDiscardFile(filePath) {
+  if (!activeProjectKey || !window.electronAPI) return;
+  window.electronAPI.gitDiscardFile(activeProjectKey, filePath).then(function () { refreshGitStatus(); });
+}
+
+function gitCommit() {
+  if (!activeProjectKey || !window.electronAPI) return;
+  var msg = gitCommitMsg.value.trim();
+  if (!msg) return;
+  window.electronAPI.gitCommit(activeProjectKey, msg).then(function (result) {
+    if (result.success) {
+      gitCommitMsg.value = '';
+      showGitStatus('Committed successfully');
+      refreshGitStatus();
+    } else {
+      showGitStatus('Commit failed: ' + result.error, true);
+    }
+  });
+}
+
+function gitPull() {
+  if (!activeProjectKey || !window.electronAPI) return;
+  showGitStatus('Pulling...');
+  window.electronAPI.gitPull(activeProjectKey).then(function (result) {
+    if (result.success) {
+      showGitStatus(result.output || 'Pull complete');
+      refreshGitStatus();
+    } else {
+      showGitStatus('Pull failed: ' + result.error, true);
+    }
+  });
+}
+
+function gitPush() {
+  if (!activeProjectKey || !window.electronAPI) return;
+  showGitStatus('Pushing...');
+  window.electronAPI.gitPush(activeProjectKey).then(function (result) {
+    if (result.success) {
+      showGitStatus(result.output || 'Push complete');
+    } else {
+      showGitStatus('Push failed: ' + result.error, true);
+    }
+  });
+}
+
+function showGitStatus(text, isError) {
+  gitStatusMsgEl.textContent = text;
+  gitStatusMsgEl.className = 'git-status-msg' + (isError ? ' git-status-error' : '');
+  if (!isError) {
+    setTimeout(function () {
+      if (gitStatusMsgEl.textContent === text) gitStatusMsgEl.textContent = '';
+    }, 5000);
+  }
+}
+
+// ============================================================
+// Run Configs
+// ============================================================
+
+function refreshRunConfigs() {
+  if (!activeProjectKey || !window.electronAPI) return;
+  while (runConfigsEl.firstChild) runConfigsEl.removeChild(runConfigsEl.firstChild);
+  window.electronAPI.getLaunchConfigs(activeProjectKey).then(function (configs) {
+    if (configs.length === 0) {
+      var empty = document.createElement('div');
+      empty.className = 'run-empty';
+      empty.textContent = 'No launch.json found';
+      runConfigsEl.appendChild(empty);
+      return;
+    }
+    for (var i = 0; i < configs.length; i++) {
+      (function (config) {
+        var item = document.createElement('div');
+        item.className = 'run-config-item';
+        var playBtn = document.createElement('button');
+        playBtn.className = 'run-play-btn';
+        playBtn.textContent = '\u25B6';
+        playBtn.title = 'Run ' + config.name;
+        var nameEl = document.createElement('span');
+        nameEl.className = 'run-config-name';
+        nameEl.textContent = config.name;
+        var typeEl = document.createElement('span');
+        typeEl.className = 'run-config-type';
+        typeEl.textContent = config.type || '';
+        playBtn.addEventListener('click', function () {
+          launchConfig(config);
+        });
+        item.appendChild(playBtn);
+        item.appendChild(nameEl);
+        item.appendChild(typeEl);
+        runConfigsEl.appendChild(item);
+      })(configs[i]);
+    }
+  });
+}
+
+function launchConfig(config) {
+  if (!activeProjectKey) return;
+  function resolve(str) {
+    if (!str) return str;
+    return str.replace(/\$\{workspaceFolder\}/g, activeProjectKey);
+  }
+  var cmd, cmdArgs, cwd;
+  cwd = config.cwd ? resolve(config.cwd) : activeProjectKey;
+  if (config.type === 'node' || config.type === 'pwa-node') {
+    cmd = config.runtimeExecutable || 'node';
+    cmdArgs = [];
+    if (config.runtimeArgs) cmdArgs = cmdArgs.concat(config.runtimeArgs.map(resolve));
+    if (config.program) cmdArgs.push(resolve(config.program));
+    if (config.args) cmdArgs = cmdArgs.concat(config.args.map(resolve));
+  } else if (config.runtimeExecutable) {
+    cmd = resolve(config.runtimeExecutable);
+    cmdArgs = (config.args || []).map(resolve);
+    if (config.program) cmdArgs.unshift(resolve(config.program));
+  } else if (config.program) {
+    cmd = resolve(config.program);
+    cmdArgs = (config.args || []).map(resolve);
+  } else {
+    return;
+  }
+  addColumn(cmdArgs, null, { cmd: cmd, title: config.name, cwd: cwd });
+}
+
+function refreshExplorer() {
+  var activeTab = document.querySelector('.explorer-tab.active');
+  if (!activeTab) return;
+  var tabName = activeTab.dataset.tab;
+  if (tabName === 'files') refreshFileTree();
+  else if (tabName === 'git') refreshGitStatus();
+  else if (tabName === 'run') refreshRunConfigs();
+}
+
+btnToggleExplorer.addEventListener('click', toggleExplorer);
+document.getElementById('btn-refresh-files').addEventListener('click', refreshFileTree);
+document.getElementById('btn-refresh-git').addEventListener('click', refreshGitStatus);
+document.getElementById('btn-refresh-run').addEventListener('click', refreshRunConfigs);
+document.getElementById('btn-git-commit').addEventListener('click', gitCommit);
+gitCommitMsg.addEventListener('keydown', function (e) {
+  if (e.ctrlKey && e.key === 'Enter') {
+    e.preventDefault();
+    gitCommit();
+  }
+  e.stopPropagation();
+});
 
 // ============================================================
 // Init
@@ -948,4 +1503,462 @@ spawnDropdown.addEventListener('click', function (e) {
   e.stopPropagation();
 });
 
+// ============================================================
+// CLAUDE.md Modal
+// ============================================================
+
+function openClaudeMdModal() {
+  if (!activeProjectKey || !window.electronAPI) return;
+
+  claudeMdPath.textContent = activeProjectKey + '/CLAUDE.md';
+  claudeMdStatus.textContent = 'Loading...';
+  claudeMdEditor.value = '';
+  claudeMdModal.classList.remove('hidden');
+
+  window.electronAPI.readClaudeMd(activeProjectKey).then(function (result) {
+    claudeMdEditor.value = result.content;
+    claudeMdStatus.textContent = result.exists ? '' : 'File does not exist yet — will be created on save';
+  });
+}
+
+function closeClaudeMdModal() {
+  claudeMdModal.classList.add('hidden');
+}
+
+function saveClaudeMd() {
+  if (!activeProjectKey || !window.electronAPI) return;
+
+  claudeMdStatus.textContent = 'Saving...';
+  window.electronAPI.saveClaudeMd(activeProjectKey, claudeMdEditor.value).then(function (result) {
+    if (result.success) {
+      claudeMdStatus.textContent = 'Saved';
+      setTimeout(function () {
+        if (claudeMdStatus.textContent === 'Saved') claudeMdStatus.textContent = '';
+      }, 2000);
+    } else {
+      claudeMdStatus.textContent = 'Error: ' + result.error;
+    }
+  });
+}
+
+btnClaudeMd.addEventListener('click', openClaudeMdModal);
+claudeMdClose.addEventListener('click', closeClaudeMdModal);
+claudeMdSave.addEventListener('click', saveClaudeMd);
+
+claudeMdModal.addEventListener('click', function (e) {
+  if (e.target === claudeMdModal) closeClaudeMdModal();
+});
+
+claudeMdEditor.addEventListener('keydown', function (e) {
+  // Ctrl+S to save
+  if (e.ctrlKey && e.key === 's') {
+    e.preventDefault();
+    saveClaudeMd();
+  }
+  // Escape to close
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeClaudeMdModal();
+  }
+  // Prevent shortcuts from bubbling to terminal
+  e.stopPropagation();
+});
+
+// ============================================================
+// Usage Modal
+// ============================================================
+
+var btnUsage = document.getElementById('btn-usage');
+var usageModal = document.getElementById('usage-modal');
+var usageClose = document.getElementById('usage-close');
+var usageLoading = document.getElementById('usage-loading');
+var usageContent = document.getElementById('usage-content');
+var usageSubtitle = document.getElementById('usage-subtitle');
+
+var usageData = null;
+
+function escHtml(str) {
+  var el = document.createElement('span');
+  el.textContent = str;
+  return el.innerHTML;
+}
+
+function formatTokenCount(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return String(n);
+}
+
+function formatDate(ts) {
+  var d = new Date(ts);
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+}
+
+function formatDateTime(ts) {
+  var d = new Date(ts);
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) +
+    ' ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+}
+
+function projectKeyToName(key) {
+  var parts = key.replace(/^[A-Z]--/, '').split('-');
+  return parts[parts.length - 1] || key;
+}
+
+function openUsageModal() {
+  usageModal.classList.remove('hidden');
+  usageLoading.style.display = '';
+  usageContent.classList.add('hidden');
+  usageSubtitle.textContent = '';
+
+  window.electronAPI.getUsage().then(function (data) {
+    usageData = data;
+    usageLoading.style.display = 'none';
+    usageContent.classList.remove('hidden');
+    usageSubtitle.textContent = data.length + ' sessions';
+    renderUsageSummary(data);
+    renderUsageDaily(data);
+    renderUsageSessions(data);
+  });
+}
+
+function closeUsageModal() {
+  usageModal.classList.add('hidden');
+}
+
+function buildUsageCard(label, value, sub) {
+  var card = document.createElement('div');
+  card.className = 'usage-card';
+  var lbl = document.createElement('div');
+  lbl.className = 'usage-card-label';
+  lbl.textContent = label;
+  var val = document.createElement('div');
+  val.className = 'usage-card-value';
+  val.textContent = value;
+  card.appendChild(lbl);
+  card.appendChild(val);
+  if (sub) {
+    var s = document.createElement('div');
+    s.className = 'usage-card-sub';
+    s.textContent = sub;
+    card.appendChild(s);
+  }
+  return card;
+}
+
+function renderUsageSummary(data) {
+  var totalInput = 0, totalOutput = 0, totalCacheRead = 0;
+  var todayInput = 0, todayOutput = 0;
+  var todayStart = new Date(); todayStart.setHours(0,0,0,0);
+  var todayMs = todayStart.getTime();
+  var last7dMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  var week7Input = 0, week7Output = 0;
+  var projectSet = new Set();
+
+  for (var i = 0; i < data.length; i++) {
+    var s = data[i];
+    var sessionInput = s.inputTokens + s.cacheReadTokens + s.cacheCreationTokens;
+    totalInput += sessionInput;
+    totalOutput += s.outputTokens;
+    totalCacheRead += s.cacheReadTokens;
+    projectSet.add(s.projectKey);
+
+    if (s.lastTimestamp >= todayMs) {
+      todayInput += sessionInput;
+      todayOutput += s.outputTokens;
+    }
+    if (s.lastTimestamp >= last7dMs) {
+      week7Input += sessionInput;
+      week7Output += s.outputTokens;
+    }
+  }
+
+  var container = document.getElementById('usage-summary-cards');
+  container.innerHTML = '';
+  container.appendChild(buildUsageCard('Today', formatTokenCount(todayInput + todayOutput), formatTokenCount(todayInput) + ' in / ' + formatTokenCount(todayOutput) + ' out'));
+  container.appendChild(buildUsageCard('Last 7 Days', formatTokenCount(week7Input + week7Output), formatTokenCount(week7Input) + ' in / ' + formatTokenCount(week7Output) + ' out'));
+  container.appendChild(buildUsageCard('All Time', formatTokenCount(totalInput + totalOutput), formatTokenCount(totalInput) + ' in / ' + formatTokenCount(totalOutput) + ' out'));
+  container.appendChild(buildUsageCard('Cache Savings', formatTokenCount(totalCacheRead), 'read from cache'));
+  container.appendChild(buildUsageCard('Sessions', String(data.length), projectSet.size + ' projects'));
+
+  renderBarChart('usage-chart-30d', data, 30);
+}
+
+function renderBarChart(containerId, data, days) {
+  var container = document.getElementById(containerId);
+  container.innerHTML = '';
+  var now = new Date();
+  now.setHours(23,59,59,999);
+  var dayBuckets = {};
+
+  for (var d = 0; d < days; d++) {
+    var date = new Date(now);
+    date.setDate(date.getDate() - d);
+    var key = date.toISOString().substring(0, 10);
+    dayBuckets[key] = { input: 0, output: 0 };
+  }
+
+  for (var i = 0; i < data.length; i++) {
+    var s = data[i];
+    if (!s.lastTimestamp) continue;
+    var dateKey = new Date(s.lastTimestamp).toISOString().substring(0, 10);
+    if (dayBuckets[dateKey]) {
+      dayBuckets[dateKey].input += s.inputTokens + s.cacheReadTokens + s.cacheCreationTokens;
+      dayBuckets[dateKey].output += s.outputTokens;
+    }
+  }
+
+  var sortedKeys = Object.keys(dayBuckets).sort();
+  var maxTotal = 0;
+  for (var k = 0; k < sortedKeys.length; k++) {
+    var b = dayBuckets[sortedKeys[k]];
+    if (b.input + b.output > maxTotal) maxTotal = b.input + b.output;
+  }
+
+  for (var j = 0; j < sortedKeys.length; j++) {
+    var bucket = dayBuckets[sortedKeys[j]];
+    var totalTokens = bucket.input + bucket.output;
+    var inputPct = maxTotal > 0 ? (bucket.input / maxTotal * 100) : 0;
+    var outputPct = maxTotal > 0 ? (bucket.output / maxTotal * 100) : 0;
+
+    var row = document.createElement('div');
+    row.className = 'usage-bar-row';
+
+    var label = document.createElement('span');
+    label.className = 'usage-bar-label';
+    label.textContent = formatDate(new Date(sortedKeys[j]));
+
+    var track = document.createElement('div');
+    track.className = 'usage-bar-track';
+    var fillIn = document.createElement('div');
+    fillIn.className = 'usage-bar-fill-input';
+    fillIn.style.width = inputPct + '%';
+    var fillOut = document.createElement('div');
+    fillOut.className = 'usage-bar-fill-output';
+    fillOut.style.width = outputPct + '%';
+    track.appendChild(fillIn);
+    track.appendChild(fillOut);
+
+    var val = document.createElement('span');
+    val.className = 'usage-bar-value';
+    val.textContent = totalTokens > 0 ? formatTokenCount(totalTokens) : '';
+
+    row.appendChild(label);
+    row.appendChild(track);
+    row.appendChild(val);
+    container.appendChild(row);
+  }
+
+  var legend = document.createElement('div');
+  legend.className = 'usage-chart-legend';
+  var dotIn = document.createElement('span');
+  dotIn.className = 'usage-legend-dot';
+  dotIn.style.background = '#0f3460';
+  var dotOut = document.createElement('span');
+  dotOut.className = 'usage-legend-dot';
+  dotOut.style.background = '#e94560';
+  var spanIn = document.createElement('span');
+  spanIn.appendChild(dotIn);
+  spanIn.appendChild(document.createTextNode(' Input'));
+  var spanOut = document.createElement('span');
+  spanOut.appendChild(dotOut);
+  spanOut.appendChild(document.createTextNode(' Output'));
+  legend.appendChild(spanIn);
+  legend.appendChild(spanOut);
+  container.appendChild(legend);
+}
+
+function renderUsageDaily(data) {
+  var dayMap = {};
+  for (var i = 0; i < data.length; i++) {
+    var s = data[i];
+    if (!s.lastTimestamp) continue;
+    var key = new Date(s.lastTimestamp).toISOString().substring(0, 10);
+    if (!dayMap[key]) dayMap[key] = { input: 0, output: 0, cacheRead: 0, sessions: 0 };
+    dayMap[key].input += s.inputTokens + s.cacheReadTokens + s.cacheCreationTokens;
+    dayMap[key].output += s.outputTokens;
+    dayMap[key].cacheRead += s.cacheReadTokens;
+    dayMap[key].sessions++;
+  }
+
+  var sortedDays = Object.keys(dayMap).sort().reverse();
+
+  renderBarChart('usage-chart-daily', data, Math.min(sortedDays.length, 90));
+
+  var tableContainer = document.getElementById('usage-daily-table');
+  tableContainer.innerHTML = '';
+
+  var table = document.createElement('table');
+  table.className = 'usage-table';
+
+  var thead = document.createElement('thead');
+  var headerRow = document.createElement('tr');
+  ['Date', 'Input', 'Output', 'Total', 'Cache Read', 'Sessions'].forEach(function (h, idx) {
+    var th = document.createElement('th');
+    th.textContent = h;
+    if (idx > 0) th.className = 'num';
+    headerRow.appendChild(th);
+  });
+  thead.appendChild(headerRow);
+  table.appendChild(thead);
+
+  var tbody = document.createElement('tbody');
+  for (var j = 0; j < sortedDays.length; j++) {
+    var day = dayMap[sortedDays[j]];
+    var tr = document.createElement('tr');
+    var cells = [
+      sortedDays[j],
+      formatTokenCount(day.input),
+      formatTokenCount(day.output),
+      formatTokenCount(day.input + day.output),
+      formatTokenCount(day.cacheRead),
+      String(day.sessions)
+    ];
+    cells.forEach(function (text, idx) {
+      var td = document.createElement('td');
+      td.textContent = text;
+      if (idx > 0) td.className = 'num';
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  tableContainer.appendChild(table);
+}
+
+function renderUsageSessions(data, filterProject) {
+  var projectFilter = document.getElementById('usage-project-filter');
+  var projectSet = new Set();
+  for (var i = 0; i < data.length; i++) projectSet.add(data[i].projectKey);
+  var projects = Array.from(projectSet).sort();
+
+  if (projectFilter.options.length !== projects.length + 1) {
+    projectFilter.innerHTML = '';
+    var allOpt = document.createElement('option');
+    allOpt.value = '';
+    allOpt.textContent = 'All Projects';
+    projectFilter.appendChild(allOpt);
+    for (var p = 0; p < projects.length; p++) {
+      var opt = document.createElement('option');
+      opt.value = projects[p];
+      opt.textContent = projectKeyToName(projects[p]);
+      projectFilter.appendChild(opt);
+    }
+  }
+
+  var filtered = filterProject
+    ? data.filter(function (s) { return s.projectKey === filterProject; })
+    : data;
+
+  filtered = filtered.slice().sort(function (a, b) { return (b.lastTimestamp || 0) - (a.lastTimestamp || 0); });
+
+  var tableContainer = document.getElementById('usage-sessions-table');
+  tableContainer.innerHTML = '';
+
+  var table = document.createElement('table');
+  table.className = 'usage-table';
+
+  var thead = document.createElement('thead');
+  var headerRow = document.createElement('tr');
+  ['Project', 'Session', 'Model', 'Input', 'Output', 'Total', 'Messages', 'Last Active'].forEach(function (h, idx) {
+    var th = document.createElement('th');
+    th.textContent = h;
+    if (idx >= 3 && idx <= 6) th.className = 'num';
+    headerRow.appendChild(th);
+  });
+  thead.appendChild(headerRow);
+  table.appendChild(thead);
+
+  var tbody = document.createElement('tbody');
+  for (var j = 0; j < filtered.length; j++) {
+    var s = filtered[j];
+    var tr = document.createElement('tr');
+
+    var tdProject = document.createElement('td');
+    tdProject.textContent = projectKeyToName(s.projectKey);
+    tr.appendChild(tdProject);
+
+    var tdSession = document.createElement('td');
+    tdSession.textContent = s.sessionId.substring(0, 8);
+    tdSession.style.maxWidth = '100px';
+    tdSession.style.overflow = 'hidden';
+    tdSession.style.textOverflow = 'ellipsis';
+    tr.appendChild(tdSession);
+
+    var tdModel = document.createElement('td');
+    if (s.model) {
+      var badge = document.createElement('span');
+      badge.className = 'usage-model-badge';
+      badge.textContent = s.model.replace('claude-', '').split('-').slice(0, 2).join('-');
+      tdModel.appendChild(badge);
+    }
+    tr.appendChild(tdModel);
+
+    var sessInput = s.inputTokens + s.cacheReadTokens + s.cacheCreationTokens;
+    [formatTokenCount(sessInput), formatTokenCount(s.outputTokens), formatTokenCount(sessInput + s.outputTokens), String(s.messageCount)].forEach(function (text) {
+      var td = document.createElement('td');
+      td.className = 'num';
+      td.textContent = text;
+      tr.appendChild(td);
+    });
+
+    var tdActive = document.createElement('td');
+    tdActive.textContent = s.lastTimestamp ? formatDateTime(s.lastTimestamp) : '-';
+    tr.appendChild(tdActive);
+
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  tableContainer.appendChild(table);
+}
+
+btnUsage.addEventListener('click', openUsageModal);
+usageClose.addEventListener('click', closeUsageModal);
+
+usageModal.addEventListener('click', function (e) {
+  if (e.target === usageModal) closeUsageModal();
+});
+
+document.querySelectorAll('.usage-tab').forEach(function (tab) {
+  tab.addEventListener('click', function () {
+    document.querySelectorAll('.usage-tab').forEach(function (t) { t.classList.remove('active'); });
+    document.querySelectorAll('.usage-tab-content').forEach(function (c) { c.classList.remove('active'); });
+    tab.classList.add('active');
+    document.getElementById('usage-tab-' + tab.dataset.usageTab).classList.add('active');
+  });
+});
+
+document.getElementById('usage-project-filter').addEventListener('change', function () {
+  if (usageData) renderUsageSessions(usageData, this.value);
+});
+
 connectWS();
+
+// --- Auto Update Notifications ---
+
+(function setupUpdateNotifications() {
+  var updateBar = document.getElementById('update-bar');
+  var updateMessage = document.getElementById('update-message');
+  var updateAction = document.getElementById('update-action');
+  var updateDismiss = document.getElementById('update-dismiss');
+
+  window.electronAPI.onUpdateAvailable(function(info) {
+    updateMessage.textContent = 'Downloading update v' + info.version + '...';
+    updateAction.style.display = 'none';
+    updateBar.classList.remove('hidden');
+  });
+
+  window.electronAPI.onUpdateDownloaded(function(info) {
+    updateMessage.textContent = 'Update v' + info.version + ' ready to install';
+    updateAction.style.display = '';
+    updateBar.classList.remove('hidden');
+  });
+
+  updateAction.addEventListener('click', function() {
+    window.electronAPI.installUpdate();
+  });
+
+  updateDismiss.addEventListener('click', function() {
+    updateBar.classList.add('hidden');
+  });
+})();
