@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Claudes</title>
+  <link rel="stylesheet" href="./node_modules/@xterm/xterm/css/xterm.css">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div id="app">
+    <div id="sidebar">
+      <div class="sidebar-header">Projects</div>
+      <div id="project-list"></div>
+      <button id="btn-add-project">+ Add Project</button>
+    </div>
+    <div id="main-area">
+      <div id="toolbar">
+        <div class="toolbar-left">
+          <button id="btn-toggle-sidebar" title="Toggle sidebar">&#9776;</button>
+          <span class="app-title">Claudes</span>
+          <span id="active-project-name" class="active-project-name"></span>
+        </div>
+        <div class="toolbar-actions">
+          <button id="btn-add" title="Spawn Claude (Ctrl+Shift+T)">+ Spawn Claude</button>
+          <span class="shortcut-hint">Ctrl+Arrow navigate | Ctrl+Shift+W close | Ctrl+Shift+T spawn</span>
+        </div>
+      </div>
+      <div id="columns-container"></div>
+    </div>
+  </div>
+  <script src="./node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="./node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="./renderer.js"></script>
+</body>
+</html>
