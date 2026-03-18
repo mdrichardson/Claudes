@@ -549,7 +549,6 @@ function addColumn(args, targetRow, opts) {
     fontFamily: "'Cascadia Code', 'Consolas', 'Courier New', monospace",
     fontSize: 14,
     cursorBlink: true,
-    rightClickSelectsWord: true,
     allowProposedApi: true
   });
 
@@ -593,12 +592,12 @@ function addColumn(args, targetRow, opts) {
     e.preventDefault();
     var sel = terminal.getSelection();
     if (sel) {
-      navigator.clipboard.writeText(sel).then(function () {
-        terminal.clearSelection();
-      });
+      window.electronAPI.clipboardWriteText(sel);
+      terminal.clearSelection();
     } else {
-      navigator.clipboard.readText().then(function (text) {
+      window.electronAPI.clipboardReadText().then(function (text) {
         if (text) {
+          terminal.focus();
           terminal.paste(text);
         }
       });

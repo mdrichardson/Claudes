@@ -39,5 +39,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onUpdateDownloaded: (callback) => ipcRenderer.on('update:downloaded', (_, info) => callback(info)),
   onUpdateProgress: (callback) => ipcRenderer.on('update:progress', (_, info) => callback(info)),
   onUpdateError: (callback) => ipcRenderer.on('update:error', (_, info) => callback(info)),
-  installUpdate: () => ipcRenderer.invoke('update:install')
+  installUpdate: () => ipcRenderer.invoke('update:install'),
+  clipboardReadText: () => ipcRenderer.invoke('clipboard:readText'),
+  clipboardWriteText: (text) => ipcRenderer.invoke('clipboard:writeText', text)
 });

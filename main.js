@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, clipboard } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -659,6 +659,14 @@ ipcMain.handle('update:install', () => {
 
 ipcMain.handle('app:getVersion', () => {
   return app.getVersion();
+});
+
+ipcMain.handle('clipboard:readText', () => {
+  return clipboard.readText();
+});
+
+ipcMain.handle('clipboard:writeText', (event, text) => {
+  clipboard.writeText(text);
 });
 
 // --- App Lifecycle ---
