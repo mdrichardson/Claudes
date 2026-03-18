@@ -549,6 +549,7 @@ function addColumn(args, targetRow, opts) {
     fontFamily: "'Cascadia Code', 'Consolas', 'Courier New', monospace",
     fontSize: 14,
     cursorBlink: true,
+    rightClickSelectsWord: true,
     allowProposedApi: true
   });
 
@@ -586,6 +587,22 @@ function addColumn(args, targetRow, opts) {
 
   terminal.onData(function (data) {
     wsSend({ type: 'write', id: id, data: data });
+  });
+
+  termWrapper.addEventListener('contextmenu', function (e) {
+    e.preventDefault();
+    var sel = terminal.getSelection();
+    if (sel) {
+      navigator.clipboard.writeText(sel).then(function () {
+        terminal.clearSelection();
+      });
+    } else {
+      navigator.clipboard.readText().then(function (text) {
+        if (text) {
+          wsSend({ type: 'write', id: id, data: text });
+        }
+      });
+    }
   });
 
   termWrapper.addEventListener('mousedown', function () {
