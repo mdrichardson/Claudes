@@ -8,6 +8,16 @@
 
 ---
 
+## How to install
+
+Download the latest installer from [**GitHub Releases**](https://github.com/paulallington/Claudes/releases/latest) — grab the `.exe` file and run it. That's it.
+
+Claudes will **automatically update itself** when new versions are published. You'll get a notification when an update is available, and it'll install in the background ready for next launch. No need to re-download manually.
+
+> **Prerequisite:** You need [Claude Code CLI](https://claude.ai/claude-code) installed and available on your PATH.
+
+---
+
 ## What is Claudes?
 
 Claudes is a **Claude Code GUI** — a desktop client that gives you a visual, multi-pane interface for running [Claude Code](https://claude.ai/claude-code) sessions. If you've been looking for a **Claude Code IDE**, a **Claude Code desktop app**, or just a better way to manage multiple AI coding agents at once, this is it.
@@ -35,14 +45,9 @@ It's not a commercial project — just a tool I made for myself that I thought o
   - `Ctrl+Arrow Left/Right` — Navigate between columns
   - `Ctrl+B` — Toggle sidebar
 
-## Installation
+## Building from source
 
-### Prerequisites
-
-- [Node.js](https://nodejs.org/) (v18+)
-- [Claude Code CLI](https://claude.ai/claude-code) installed and available on your PATH
-
-### Setup
+If you prefer to run from source instead of the installer:
 
 ```bash
 git clone https://github.com/paulallington/Claudes.git
@@ -51,7 +56,7 @@ npm install
 npm start
 ```
 
-A desktop shortcut can be created by running the included `claudes.vbs` via wscript.
+Requires [Node.js](https://nodejs.org/) (v18+) and [Claude Code CLI](https://claude.ai/claude-code) on your PATH.
 
 ## How it works
 
