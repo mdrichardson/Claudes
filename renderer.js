@@ -599,7 +599,7 @@ function addColumn(args, targetRow, opts) {
     } else {
       navigator.clipboard.readText().then(function (text) {
         if (text) {
-          wsSend({ type: 'write', id: id, data: text });
+          terminal.paste(text);
         }
       });
     }
