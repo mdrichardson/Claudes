@@ -1,4 +1,4 @@
-/* global Terminal, FitAddon */
+/* global Terminal, FitAddon, WebglAddon */
 
 var columnsContainer = document.getElementById('columns-container');
 var btnAdd = document.getElementById('btn-add');
@@ -555,6 +555,7 @@ function addColumn(args, targetRow, opts) {
   var fitAddon = new FitAddon.FitAddon();
   terminal.loadAddon(fitAddon);
   terminal.open(termWrapper);
+  try { terminal.loadAddon(new WebglAddon.WebglAddon()); } catch (e) { console.warn('WebGL addon failed, using canvas renderer:', e); }
 
   var cwd = opts.cwd || activeProjectKey;
   var claudeArgs = args || [];
@@ -2073,7 +2074,21 @@ function openUsageModal() {
     usageData = data;
     usageLoading.style.display = 'none';
     usageContent.classList.remove('hidden');
-    usageSubtitle.textContent = data.length + ' sessions';
+    // Show session count and data date range
+    var subtitleText = data.length + ' sessions';
+    if (data.length > 0) {
+      var earliest = Infinity;
+      for (var i = 0; i < data.length; i++) {
+        if (data[i].firstTimestamp && data[i].firstTimestamp < earliest) earliest = data[i].firstTimestamp;
+      }
+      if (earliest < Infinity) {
+        var d = new Date(earliest);
+        var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        var days = Math.ceil((Date.now() - earliest) / (24 * 60 * 60 * 1000));
+        subtitleText += ' \u00b7 ' + days + ' days of data (since ' + months[d.getMonth()] + ' ' + d.getDate() + ')';
+      }
+    }
+    usageSubtitle.textContent = subtitleText;
     renderUsageSummary(data);
     renderUsageDaily(data);
     renderUsageSessions(data);
@@ -2107,10 +2122,9 @@ function buildUsageCard(label, value, sub) {
 function renderUsageSummary(data) {
   var totalInput = 0, totalOutput = 0, totalCacheRead = 0;
   var last7dMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  var last30dMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
   var week7Input = 0, week7Output = 0, week7Cache = 0, week7Sessions = 0;
-  var month30Input = 0, month30Output = 0, month30Cache = 0, month30Sessions = 0;
-  var projectSet7 = new Set(), projectSet30 = new Set(), projectSetAll = new Set();
+  var projectSet7 = new Set(), projectSetAll = new Set();
+  var earliestTs = Infinity, latestTs = 0;
 
   for (var i = 0; i < data.length; i++) {
     var s = data[i];
@@ -2120,6 +2134,9 @@ function renderUsageSummary(data) {
     totalCacheRead += s.cacheReadTokens;
     projectSetAll.add(s.projectKey);
 
+    if (s.firstTimestamp && s.firstTimestamp < earliestTs) earliestTs = s.firstTimestamp;
+    if (s.lastTimestamp && s.lastTimestamp > latestTs) latestTs = s.lastTimestamp;
+
     if (s.lastTimestamp >= last7dMs) {
       week7Input += sessionInput;
       week7Output += s.outputTokens;
@@ -2127,23 +2144,29 @@ function renderUsageSummary(data) {
       week7Sessions++;
       projectSet7.add(s.projectKey);
     }
-    if (s.lastTimestamp >= last30dMs) {
-      month30Input += sessionInput;
-      month30Output += s.outputTokens;
-      month30Cache += s.cacheReadTokens;
-      month30Sessions++;
-      projectSet30.add(s.projectKey);
-    }
   }
+
+  // Calculate actual data span in days
+  var dataSpanDays = earliestTs < Infinity ? Math.ceil((Date.now() - earliestTs) / (24 * 60 * 60 * 1000)) : 0;
 
   var periods = {
     '7d':  { input: week7Input,  output: week7Output,  cache: week7Cache,    sessions: week7Sessions,   projects: projectSet7.size },
-    '30d': { input: month30Input, output: month30Output, cache: month30Cache, sessions: month30Sessions, projects: projectSet30.size },
     'all': { input: totalInput,   output: totalOutput,   cache: totalCacheRead, sessions: data.length,   projects: projectSetAll.size }
   };
 
-  var periodLabels = { '7d': 'Last 7 Days', '30d': 'Last 30 Days', 'all': 'All Time' };
-  var chartDays = { '7d': 7, '30d': 30, 'all': 90 };
+  // Format earliest date for display
+  var dataRangeStr = '';
+  if (earliestTs < Infinity) {
+    var earliest = new Date(earliestTs);
+    var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    dataRangeStr = months[earliest.getMonth()] + ' ' + earliest.getDate();
+  }
+
+  var periodLabels = {
+    '7d': 'Last 7 Days',
+    'all': dataRangeStr ? 'All Time (since ' + dataRangeStr + ')' : 'All Time'
+  };
+  var chartDays = { '7d': 7, 'all': Math.max(dataSpanDays, 30) };
 
   function renderPeriod(period) {
     var p = periods[period];
@@ -2176,7 +2199,7 @@ function renderUsageSummary(data) {
     });
   }
 
-  renderPeriod('30d');
+  renderPeriod('all');
 }
 
 function renderEnvironmentalImpact(totalInput, totalOutput, totalCacheRead, periodLabel) {
