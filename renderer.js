@@ -33,6 +33,11 @@ var ws = null;
 // All pty columns keyed by global id (for routing WS messages)
 var allColumns = new Map();
 
+// Activity state tracking per column: 'working' | 'waiting' | 'exited'
+var activityTimers = new Map(); // columnId -> setTimeout handle
+var ACTIVITY_IDLE_MS = 3000; // after 3s of no data, consider Claude "waiting"
+var resizeSuppressed = new Set(); // columnIds temporarily suppressed after resize
+
 // Per-project state: projectKey -> { containerEl, rows: [], columns: Map, focusedColumnId }
 var projectStates = new Map();
 var activeProjectKey = null;
@@ -104,10 +109,18 @@ function connectWS() {
     try { msg = JSON.parse(event.data); } catch (e) { return; }
     if (msg.type === 'data') {
       var col = allColumns.get(msg.id);
-      if (col) col.terminal.write(msg.data);
+      if (col) {
+        col.terminal.write(msg.data);
+        if (!resizeSuppressed.has(msg.id)) {
+          setColumnActivity(msg.id, 'working');
+        }
+      }
     } else if (msg.type === 'exit') {
       var col2 = allColumns.get(msg.id);
-      if (col2) col2.element.appendChild(createExitOverlay(msg.id, msg.exitCode, col2));
+      if (col2) {
+        col2.element.appendChild(createExitOverlay(msg.id, msg.exitCode, col2));
+        setColumnActivity(msg.id, 'exited');
+      }
     }
   };
   ws.onclose = function () { setTimeout(connectWS, 2000); };
@@ -117,6 +130,111 @@ function wsSend(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(obj));
   }
+}
+
+// ============================================================
+// Activity Pulse Tracking
+// ============================================================
+
+function setColumnActivity(id, state) {
+  var col = allColumns.get(id);
+  if (!col) return;
+
+  var prevState = col.activityState;
+
+  // Clear any pending timer
+  var timer = activityTimers.get(id);
+  if (timer) clearTimeout(timer);
+
+  if (state === 'working') {
+    // Only update DOM if transitioning into working
+    if (prevState !== 'working') {
+      col.activityState = 'working';
+      updateActivityIndicator(id);
+      updateSidebarActivity();
+    }
+    // Always reset the idle timer
+    activityTimers.set(id, setTimeout(function () {
+      var c = allColumns.get(id);
+      if (c && c.activityState === 'working') {
+        c.activityState = 'waiting';
+        updateActivityIndicator(id);
+        updateSidebarActivity();
+      }
+    }, ACTIVITY_IDLE_MS));
+  } else {
+    col.activityState = state; // 'exited'
+    activityTimers.delete(id);
+    updateActivityIndicator(id);
+    updateSidebarActivity();
+  }
+}
+
+function updateActivityIndicator(id) {
+  var col = allColumns.get(id);
+  if (!col || !col.headerEl) return;
+
+  var dot = col.headerEl.querySelector('.activity-dot');
+  if (!dot) {
+    dot = document.createElement('span');
+    dot.className = 'activity-dot';
+    var titleEl = col.headerEl.querySelector('.col-title');
+    col.headerEl.insertBefore(dot, titleEl);
+  }
+
+  dot.className = 'activity-dot';
+  if (col.activityState === 'working') {
+    dot.classList.add('activity-working');
+    dot.title = 'Working...';
+  } else if (col.activityState === 'waiting') {
+    dot.classList.add('activity-waiting');
+    dot.title = 'Waiting for input';
+  } else {
+    dot.classList.add('activity-exited');
+    dot.title = 'Exited';
+  }
+}
+
+function updateSidebarActivity() {
+  // Count waiting columns per project
+  var waitingByProject = {};
+  var workingByProject = {};
+  allColumns.forEach(function (col) {
+    var key = col.projectKey;
+    if (col.activityState === 'waiting') {
+      waitingByProject[key] = (waitingByProject[key] || 0) + 1;
+    }
+    if (col.activityState === 'working') {
+      workingByProject[key] = (workingByProject[key] || 0) + 1;
+    }
+  });
+
+  // Update sidebar items
+  var items = projectListEl.querySelectorAll('.project-item');
+  config.projects.forEach(function (project, index) {
+    var item = items[index];
+    if (!item) return;
+
+    var key = project.path;
+    var waiting = waitingByProject[key] || 0;
+    var working = workingByProject[key] || 0;
+
+    // Remove existing pulse indicator
+    var existing = item.querySelector('.project-pulse');
+    if (existing) existing.remove();
+
+    if (waiting > 0) {
+      var pulse = document.createElement('span');
+      pulse.className = 'project-pulse pulse-waiting';
+      pulse.title = waiting + ' waiting for input';
+      item.querySelector('.project-right').insertBefore(pulse, item.querySelector('.project-right').firstChild);
+    } else if (working > 0) {
+      var pulse2 = document.createElement('span');
+      pulse2.className = 'project-pulse pulse-working';
+      pulse2.title = working + ' working';
+      item.querySelector('.project-right').insertBefore(pulse2, item.querySelector('.project-right').firstChild);
+    }
+  });
 }
 
 // ============================================================
@@ -526,6 +644,7 @@ function createExitOverlay(id, exitCode, col) {
     }
     wsSend(sendMsg);
     col.terminal.clear();
+    setColumnActivity(id, 'working');
   });
   closeBtn.addEventListener('click', function () { removeColumn(id); });
 
@@ -796,6 +915,11 @@ function removeColumn(id) {
   var col = allColumns.get(id);
   if (!col) return;
 
+  // Clean up activity timer
+  var timer = activityTimers.get(id);
+  if (timer) clearTimeout(timer);
+  activityTimers.delete(id);
+
   wsSend({ type: 'kill', id: id });
 
   var colElement = col.element;
@@ -841,6 +965,7 @@ function removeColumn(id) {
   saveColumnCounts();
   persistSessions(col.projectKey);
   renderProjectList();
+  updateSidebarActivity();
 }
 
 function setFocusedColumn(id) {
@@ -1004,6 +1129,9 @@ function refitAll() {
   state.columns.forEach(function (col, id) {
     try {
       col.fitAddon.fit();
+      // Suppress activity tracking for redraw data after resize
+      resizeSuppressed.add(id);
+      setTimeout(function () { resizeSuppressed.delete(id); }, 500);
       wsSend({ type: 'resize', id: id, cols: col.terminal.cols, rows: col.terminal.rows });
     } catch (e) {}
   });

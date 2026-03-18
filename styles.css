@@ -551,10 +551,71 @@ html, body {
   user-select: none;
 }
 
+/* --- Activity Pulse Indicators --- */
+
+.activity-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+  margin-right: 6px;
+  background: var(--text-faint);
+  opacity: 0.4;
+}
+
+.activity-dot.activity-working {
+  background: var(--color-green);
+  opacity: 1;
+  animation: pulse-working 1.5s ease-in-out infinite;
+}
+
+.activity-dot.activity-waiting {
+  background: #f5a623;
+  opacity: 1;
+  animation: pulse-waiting 1.2s ease-in-out infinite;
+}
+
+.activity-dot.activity-exited {
+  background: var(--text-faint);
+  opacity: 0.3;
+  animation: none;
+}
+
+@keyframes pulse-working {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+
+@keyframes pulse-waiting {
+  0%, 100% { opacity: 0.6; box-shadow: 0 0 0 0 rgba(245, 166, 35, 0.5); }
+  50% { opacity: 1; box-shadow: 0 0 6px 2px rgba(245, 166, 35, 0.4); }
+}
+
+/* Sidebar project pulse */
+
+.project-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.project-pulse.pulse-waiting {
+  background: #f5a623;
+  animation: pulse-waiting 1.2s ease-in-out infinite;
+}
+
+.project-pulse.pulse-working {
+  background: var(--color-green);
+  animation: pulse-working 1.5s ease-in-out infinite;
+}
+
 .column-header .col-title {
   font-weight: 500;
   cursor: default;
-  max-width: calc(100% - 30px);
+  max-width: calc(100% - 44px);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
