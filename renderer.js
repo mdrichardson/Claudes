@@ -583,12 +583,28 @@ function createColumnHeader(id, customTitle) {
     startTitleEdit(id, title);
   });
   var closeBtn = document.createElement('span');
+  var maximizeBtn = document.createElement('span');
+  maximizeBtn.className = 'col-maximize';
+  maximizeBtn.title = 'Maximize';
+  maximizeBtn.textContent = '\u25A1'; // square symbol
+  maximizeBtn.addEventListener('click', function () {
+    toggleMaximizeColumn(id);
+  });
+  var closeBtn = document.createElement('span');
   closeBtn.className = 'col-close';
   closeBtn.dataset.id = String(id);
   closeBtn.title = 'Kill';
   closeBtn.textContent = '\u00d7';
   header.appendChild(title);
+  header.appendChild(maximizeBtn);
   header.appendChild(closeBtn);
+
+  // Double-click header (not title) to toggle maximize
+  header.addEventListener('dblclick', function (e) {
+    if (e.target === title || title.contains(e.target)) return; // title dblclick is rename
+    toggleMaximizeColumn(id);
+  });
+
   return header;
 }
 
@@ -969,6 +985,11 @@ function removeColumn(id) {
   var col = allColumns.get(id);
   if (!col) return;
 
+  // If this column is maximized, restore first
+  if (maximizedColumnId === id) {
+    toggleMaximizeColumn(id);
+  }
+
   // Clean up timers
   var timer = activityTimers.get(id);
   if (timer) clearTimeout(timer);
@@ -1074,6 +1095,68 @@ function navigateColumn(direction) {
   }
 
   setFocusedColumn(ids[newIdx]);
+}
+
+// ============================================================
+// Maximize / Restore Column
+// ============================================================
+
+var maximizedColumnId = null;
+
+function toggleMaximizeColumn(id) {
+  var col = allColumns.get(id);
+  if (!col) return;
+  var state = projectStates.get(col.projectKey);
+  if (!state) return;
+
+  if (maximizedColumnId === id) {
+    // Restore
+    maximizedColumnId = null;
+    state.containerEl.classList.remove('has-maximized');
+    state.columns.forEach(function (c) {
+      c.element.classList.remove('col-maximized', 'col-hidden');
+      c.element.style.flex = '';
+      c.element.style.width = '';
+    });
+    // Show all rows and resize handles
+    for (var r = 0; r < state.rows.length; r++) {
+      state.rows[r].el.classList.remove('row-hidden');
+    }
+    state.containerEl.querySelectorAll('.resize-handle').forEach(function (h) {
+      h.classList.remove('handle-hidden');
+    });
+    var btn = col.headerEl.querySelector('.col-maximize');
+    if (btn) { btn.textContent = '\u25A1'; btn.title = 'Maximize'; }
+  } else {
+    // Maximize
+    maximizedColumnId = id;
+    state.containerEl.classList.add('has-maximized');
+    var targetRow = findRowForColumn(state, id);
+    for (var r2 = 0; r2 < state.rows.length; r2++) {
+      if (state.rows[r2] !== targetRow) {
+        state.rows[r2].el.classList.add('row-hidden');
+      }
+    }
+    state.columns.forEach(function (c, cid) {
+      if (cid === id) {
+        c.element.classList.add('col-maximized');
+        c.element.classList.remove('col-hidden');
+        c.element.style.flex = '1';
+        c.element.style.width = '';
+      } else {
+        c.element.classList.add('col-hidden');
+        c.element.classList.remove('col-maximized');
+      }
+    });
+    // Hide resize handles
+    state.containerEl.querySelectorAll('.resize-handle').forEach(function (h) {
+      h.classList.add('handle-hidden');
+    });
+    var btn2 = col.headerEl.querySelector('.col-maximize');
+    if (btn2) { btn2.textContent = '\u25A7'; btn2.title = 'Restore'; }
+    setFocusedColumn(id);
+  }
+  refitAll();
 }
 
 // ============================================================
@@ -1247,6 +1330,14 @@ document.addEventListener('keydown', function (e) {
   if (e.ctrlKey && e.shiftKey && e.key === 'E') {
     e.preventDefault();
     toggleExplorer();
+    return;
+  }
+  if (e.ctrlKey && e.shiftKey && e.key === 'M') {
+    e.preventDefault();
+    var state = getActiveState();
+    if (state && state.focusedColumnId !== null) {
+      toggleMaximizeColumn(state.focusedColumnId);
+    }
     return;
   }
   if (e.ctrlKey && !e.shiftKey && e.key >= '1' && e.key <= '9') {
