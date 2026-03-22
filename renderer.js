@@ -109,8 +109,10 @@ var FONT_SIZE_DEFAULT = 14;
 // WebSocket
 // ============================================================
 
+var wsPort = 3456;
+
 function connectWS() {
-  ws = new WebSocket('ws://127.0.0.1:3456');
+  ws = new WebSocket('ws://127.0.0.1:' + wsPort);
   ws.onopen = function () { loadProjects(); };
   ws.onmessage = function (event) {
     var msg;
@@ -3247,7 +3249,15 @@ document.getElementById('usage-project-filter').addEventListener('change', funct
   if (usageData) renderUsageSessions(usageData, this.value);
 });
 
-connectWS();
+// Fetch PTY port (dev uses 3457 to avoid conflict with production on 3456)
+if (window.electronAPI && window.electronAPI.getPtyPort) {
+  window.electronAPI.getPtyPort().then(function (port) {
+    if (port) wsPort = port;
+    connectWS();
+  });
+} else {
+  connectWS();
+}
 
 // --- App Version ---
 

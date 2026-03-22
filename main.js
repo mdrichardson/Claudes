@@ -9,6 +9,7 @@ const http = require('http');
 let mainWindow;
 let hookServer;
 let hookServerPort;
+const ptyPort = app.isPackaged ? 3456 : 3457;
 let ptyServerProcess;
 
 const CONFIG_DIR = path.join(os.homedir(), '.claudes');
@@ -61,7 +62,7 @@ function startPtyServer() {
 
     ptyServerProcess = spawn(nodePath, [serverScript], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env }
+      env: { ...process.env, PTY_PORT: String(ptyPort) }
     });
 
     ptyServerProcess.stderr.on('data', (data) => {
@@ -724,19 +725,24 @@ function startHookServer() {
 }
 
 ipcMain.handle('hooks:getPort', () => hookServerPort);
+ipcMain.handle('pty:getPort', () => ptyPort);
 
 // --- App Lifecycle ---
 
-const gotLock = app.requestSingleInstanceLock();
+// In dev mode (not packaged), skip single-instance lock so dev can run alongside production
+const isDev = !app.isPackaged;
+const gotLock = isDev || app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
-  });
+  if (!isDev) {
+    app.on('second-instance', () => {
+      if (mainWindow) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.focus();
+      }
+    });
+  }
 
   app.whenReady().then(async () => {
     await startPtyServer();

@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getOsDark: () => ipcRenderer.invoke('theme:getOsDark'),
   getClaudeConfigPath: () => ipcRenderer.invoke('claude:getConfigPath'),
   onOsThemeChanged: (callback) => ipcRenderer.on('theme:osChanged', (_, isDark) => callback(isDark)),
+  getPtyPort: () => ipcRenderer.invoke('pty:getPort'),
   getHookServerPort: () => ipcRenderer.invoke('hooks:getPort'),
   onHookEvent: (callback) => ipcRenderer.on('hook:event', (_, event) => callback(event))
 });

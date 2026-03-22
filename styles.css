@@ -302,8 +302,11 @@ html, body {
 .toolbar-left {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   -webkit-app-region: no-drag;
+  overflow: hidden;
+  min-width: 0;
+  flex-shrink: 1;
 }
 
 #btn-toggle-sidebar {
@@ -339,17 +342,19 @@ html, body {
 .active-project-name {
   font-size: 12px;
   color: var(--text-dim);
-  max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+  flex-shrink: 1;
 }
 
 .toolbar-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   -webkit-app-region: no-drag;
+  flex-shrink: 0;
 }
 
 #btn-add-row {
@@ -538,6 +543,7 @@ html, body {
   flex: 1 1 0;
   position: relative;
   border-right: 1px solid var(--border-primary);
+  container-type: inline-size;
   background: var(--bg-main);
 }
 
@@ -641,8 +647,14 @@ html, body {
 .col-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
   margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* Hide less-critical column actions on narrow columns */
+@container (max-width: 250px) {
+  .col-action, .col-effort { display: none; }
 }
 
 .col-action {
@@ -835,9 +847,11 @@ html, body {
   color: var(--text-dim);
   font-size: 11px;
   font-family: 'Cascadia Code', 'Consolas', monospace;
-  padding: 2px 8px;
+  padding: 2px 6px;
   border-radius: 3px;
   cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
   letter-spacing: 0.3px;
 }
 
