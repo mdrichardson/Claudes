@@ -2320,6 +2320,28 @@ if (window.electronAPI && window.electronAPI.onOsThemeChanged) {
 }
 
 // ============================================================
+// Hook Server Integration
+// ============================================================
+
+if (window.electronAPI && window.electronAPI.onHookEvent) {
+  window.electronAPI.onHookEvent(function (event) {
+    allColumns.forEach(function (col, id) {
+      if (col.sessionId && event.session_id === col.sessionId) {
+        if (event.matcher === 'idle_prompt' || event.matcher === 'permission_prompt') {
+          setActivity(id, 'waiting');
+        }
+      }
+    });
+  });
+}
+
+if (window.electronAPI && window.electronAPI.getHookServerPort) {
+  window.electronAPI.getHookServerPort().then(function (port) {
+    if (port) console.log('[hooks] Hook server at http://127.0.0.1:' + port + '/hook');
+  });
+}
+
+// ============================================================
 // Init
 // ============================================================
 

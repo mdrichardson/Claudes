@@ -45,5 +45,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setTitleBarOverlay: (colors) => ipcRenderer.invoke('theme:setTitleBarOverlay', colors),
   getOsDark: () => ipcRenderer.invoke('theme:getOsDark'),
   getClaudeConfigPath: () => ipcRenderer.invoke('claude:getConfigPath'),
-  onOsThemeChanged: (callback) => ipcRenderer.on('theme:osChanged', (_, isDark) => callback(isDark))
+  onOsThemeChanged: (callback) => ipcRenderer.on('theme:osChanged', (_, isDark) => callback(isDark)),
+  getHookServerPort: () => ipcRenderer.invoke('hooks:getPort'),
+  onHookEvent: (callback) => ipcRenderer.on('hook:event', (_, event) => callback(event))
 });

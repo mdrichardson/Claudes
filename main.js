@@ -4,8 +4,11 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { spawn, execFileSync } = require('child_process');
+const http = require('http');
 
 let mainWindow;
+let hookServer;
+let hookServerPort;
 let ptyServerProcess;
 
 const CONFIG_DIR = path.join(os.homedir(), '.claudes');
@@ -694,6 +697,34 @@ ipcMain.handle('claude:getConfigPath', () => {
   return path.join(os.homedir(), '.claude', 'settings.json');
 });
 
+// --- Hook Server ---
+
+function startHookServer() {
+  hookServer = http.createServer((req, res) => {
+    if (req.method === 'POST' && req.url === '/hook') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        try {
+          const event = JSON.parse(body);
+          mainWindow?.webContents.send('hook:event', event);
+        } catch {}
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('ok');
+      });
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+  hookServer.listen(0, '127.0.0.1', () => {
+    hookServerPort = hookServer.address().port;
+    console.log('[hook-server] listening on port', hookServerPort);
+  });
+}
+
+ipcMain.handle('hooks:getPort', () => hookServerPort);
+
 // --- App Lifecycle ---
 
 const gotLock = app.requestSingleInstanceLock();
@@ -709,6 +740,7 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     await startPtyServer();
+    startHookServer();
     createWindow();
     setupAutoUpdater();
   });
