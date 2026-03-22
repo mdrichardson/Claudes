@@ -1017,11 +1017,19 @@ function removeColumn(id) {
   if (state) {
     state.columns.delete(id);
 
-    // Remove from row
+    // Remove from row and reset remaining columns to fill space
     for (var r = 0; r < state.rows.length; r++) {
       var idx = state.rows[r].columnIds.indexOf(id);
       if (idx !== -1) {
         state.rows[r].columnIds.splice(idx, 1);
+        // Reset remaining columns in this row to equal flex
+        for (var ci = 0; ci < state.rows[r].columnIds.length; ci++) {
+          var sibling = allColumns.get(state.rows[r].columnIds[ci]);
+          if (sibling) {
+            sibling.element.style.flex = '';
+            sibling.element.style.width = '';
+          }
+        }
         removeRowIfEmpty(state, state.rows[r]);
         break;
       }
