@@ -208,6 +208,16 @@ html, body {
   margin-top: 2px;
 }
 
+.project-item .project-branch {
+  display: block;
+  font-size: 10px;
+  color: var(--color-cyan);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 1px;
+}
+
 .project-right {
   display: flex;
   align-items: center;

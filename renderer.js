@@ -406,7 +406,21 @@ function renderProjectList() {
     pathEl.className = 'project-path';
     pathEl.textContent = project.path;
 
+    var branchEl = document.createElement('div');
+    branchEl.className = 'project-branch';
+    branchEl.textContent = '';
+
+    // Fetch branch asynchronously
+    if (window.electronAPI && window.electronAPI.gitBranch) {
+      (function (el, projectPath) {
+        window.electronAPI.gitBranch(projectPath).then(function (branch) {
+          if (branch) el.textContent = '\u2387 ' + branch.trim();
+        }).catch(function () {});
+      })(branchEl, project.path);
+    }
+
     info.appendChild(name);
+    info.appendChild(branchEl);
     info.appendChild(pathEl);
 
     var rightSide = document.createElement('div');
@@ -461,6 +475,16 @@ function setActiveProject(index, isStartup) {
   config.activeProjectIndex = index;
   activeProjectKey = newKey;
   activeProjectNameEl.textContent = project.name;
+
+  // Show branch in toolbar
+  if (window.electronAPI && window.electronAPI.gitBranch) {
+    window.electronAPI.gitBranch(newKey).then(function (branch) {
+      if (branch && activeProjectKey === newKey) {
+        activeProjectNameEl.textContent = project.name + '  \u2387 ' + branch.trim();
+      }
+    }).catch(function () {});
+  }
+
   saveConfig();
   renderProjectList();
 
