@@ -2443,6 +2443,13 @@ function saveClaudeMd() {
 }
 
 btnClaudeMd.addEventListener('click', openClaudeMdModal);
+
+document.getElementById('btn-claude-config').addEventListener('click', function () {
+  if (!window.electronAPI || !window.electronAPI.getClaudeConfigPath) return;
+  window.electronAPI.getClaudeConfigPath().then(function (configPath) {
+    openFileEditor(configPath);
+  });
+});
 claudeMdClose.addEventListener('click', closeClaudeMdModal);
 claudeMdSave.addEventListener('click', saveClaudeMd);
 

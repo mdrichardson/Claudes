@@ -690,6 +690,10 @@ ipcMain.handle('theme:getOsDark', () => {
   return nativeTheme.shouldUseDarkColors;
 });
 
+ipcMain.handle('claude:getConfigPath', () => {
+  return path.join(os.homedir(), '.claude', 'settings.json');
+});
+
 // --- App Lifecycle ---
 
 const gotLock = app.requestSingleInstanceLock();
