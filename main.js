@@ -514,18 +514,20 @@ ipcMain.handle('git:stashPop', (event, projectPath) => {
 
 ipcMain.handle('git:commitDetail', (event, projectPath, hash) => {
   try {
-    const output = execFileSync('git', ['show', '--stat', '--format=%H|%s|%an|%aI', hash, '--no-color'], { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
-    const lines = output.trim().split('\n');
-    const meta = lines[0].split('|');
+    // Get metadata
+    const metaOutput = execFileSync('git', ['show', '--format=%H|%s|%an|%aI', '-s', hash, '--no-color'], { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
+    const meta = metaOutput.trim().split('|');
+    // Get file stats with --numstat for exact counts and full paths
+    const statOutput = execFileSync('git', ['show', '--numstat', '--format=', hash, '--no-color'], { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
     const files = [];
-    for (let i = 1; i < lines.length; i++) {
-      const statMatch = lines[i].match(/^\s*(.+?)\s+\|\s+(\d+)\s+(\+*)(-*)/);
-      if (statMatch) {
+    const statLines = statOutput.trim().split('\n').filter(Boolean);
+    for (let i = 0; i < statLines.length; i++) {
+      const parts = statLines[i].split('\t');
+      if (parts.length >= 3) {
         files.push({
-          file: statMatch[1].trim(),
-          insertions: (statMatch[3] || '').length,
-          deletions: (statMatch[4] || '').length,
-          total: parseInt(statMatch[2])
+          file: parts[2],
+          insertions: parts[0] === '-' ? 0 : parseInt(parts[0]) || 0,
+          deletions: parts[1] === '-' ? 0 : parseInt(parts[1]) || 0
         });
       }
     }
@@ -537,19 +539,13 @@ ipcMain.handle('git:commitDetail', (event, projectPath, hash) => {
 
 ipcMain.handle('git:diffCommit', (event, projectPath, hash, filePath) => {
   try {
+    // git show reliably gets the diff for any commit (including initial, merges)
     const args = filePath
-      ? ['diff', hash + '~1..' + hash, '--', filePath]
-      : ['diff', hash + '~1..' + hash];
+      ? ['show', '--format=', hash, '--', filePath]
+      : ['show', '--format=', hash];
     return execFileSync('git', args, { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
   } catch {
-    try {
-      const args2 = filePath
-        ? ['show', hash, '--', filePath]
-        : ['show', '--format=', hash];
-      return execFileSync('git', args2, { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
-    } catch {
-      return '';
-    }
+    return '';
   }
 });
 
