@@ -2236,7 +2236,7 @@ var gitStatusMsgEl = document.getElementById('git-status-msg');
 var gitAmendCheckbox = document.getElementById('git-amend-checkbox');
 var gitPollTimer = null;
 var lastGitRaw = null;
-var gitExpandedDiff = null; // track which file has diff open
+var graphLaneState = null;
 
 function refreshGitStatus(force) {
   if (!activeProjectKey || !window.electronAPI) return;
@@ -2246,7 +2246,9 @@ function refreshGitStatus(force) {
     window.electronAPI.gitBranch(activeProjectKey),
     window.electronAPI.gitAheadBehind(activeProjectKey),
     window.electronAPI.gitStashList(activeProjectKey),
-    window.electronAPI.gitLog(activeProjectKey, 10)
+    window.electronAPI.gitGraphLog(activeProjectKey, 50),
+    window.electronAPI.gitDiffStat(activeProjectKey, false),
+    window.electronAPI.gitDiffStat(activeProjectKey, true)
   ];
 
   if (!force) {
@@ -2254,7 +2256,7 @@ function refreshGitStatus(force) {
       var rawKey = JSON.stringify(results[0]) + '|' + results[1] + '|' + JSON.stringify(results[2]) + '|' + results[3].length + '|' + JSON.stringify(results[4]);
       if (rawKey === lastGitRaw) return;
       lastGitRaw = rawKey;
-      renderGitStatus(results[0], results[1], results[2], results[3], results[4]);
+      renderGitStatus(results[0], results[1], results[2], results[3], results[4], results[5], results[6]);
     });
     return;
   }
@@ -2262,11 +2264,12 @@ function refreshGitStatus(force) {
   lastGitRaw = null;
   Promise.all(fetchAll).then(function (results) {
     lastGitRaw = JSON.stringify(results[0]) + '|' + results[1] + '|' + JSON.stringify(results[2]) + '|' + results[3].length + '|' + JSON.stringify(results[4]);
-    renderGitStatus(results[0], results[1], results[2], results[3], results[4]);
+    renderGitStatus(results[0], results[1], results[2], results[3], results[4], results[5], results[6]);
   });
 }
 
-function renderGitStatus(files, branch, aheadBehind, stashes, commits) {
+function renderGitStatus(files, branch, aheadBehind, stashes, graphLog, unstagedStats, stagedStats) {
+  graphLaneState = null;
   while (gitHeaderEl.firstChild) gitHeaderEl.removeChild(gitHeaderEl.firstChild);
   while (gitChangesEl.firstChild) gitChangesEl.removeChild(gitChangesEl.firstChild);
 
@@ -2363,7 +2366,7 @@ function renderGitStatus(files, branch, aheadBehind, stashes, commits) {
     }
   }
 
-  if (staged.length === 0 && changes.length === 0 && commits.length === 0) {
+  if (staged.length === 0 && changes.length === 0 && graphLog.length === 0) {
     var empty = document.createElement('div');
     empty.className = 'git-empty';
     empty.textContent = 'No changes';
@@ -2372,15 +2375,15 @@ function renderGitStatus(files, branch, aheadBehind, stashes, commits) {
   }
 
   if (staged.length > 0) {
-    gitChangesEl.appendChild(createGitSection('Staged Changes', staged, true));
+    gitChangesEl.appendChild(createGitSection('Staged Changes', staged, true, stagedStats));
   }
   if (changes.length > 0) {
-    gitChangesEl.appendChild(createGitSection('Changes', changes, false));
+    gitChangesEl.appendChild(createGitSection('Changes', changes, false, unstagedStats));
   }
 
-  // Commit log section
-  if (commits.length > 0) {
-    gitChangesEl.appendChild(createGitLogSection(commits));
+  // Commit graph section
+  if (graphLog.length > 0) {
+    gitChangesEl.appendChild(createGitGraphSection(graphLog));
   }
 }
 
@@ -2456,52 +2459,17 @@ function showBranchCreateInput(dropdown, currentBranch) {
   input.focus();
 }
 
-// Commit log section
-function createGitLogSection(commits) {
+function createGitGraphSection(graphLog) {
+  // Placeholder — implemented in Task 6
   var section = document.createElement('div');
   section.className = 'git-section';
-
   var header = document.createElement('div');
   header.className = 'git-section-header';
-
-  var arrow = document.createElement('span');
-  arrow.className = 'git-section-arrow';
-  arrow.textContent = '\u25B8'; // collapsed by default
-
   var label = document.createElement('span');
   label.className = 'git-section-label';
-  label.textContent = 'Recent Commits (' + commits.length + ')';
-
-  header.appendChild(arrow);
+  label.textContent = 'Commits (' + graphLog.length + ')';
   header.appendChild(label);
   section.appendChild(header);
-
-  var list = document.createElement('div');
-  list.className = 'git-section-list';
-  list.style.display = 'none'; // collapsed by default
-
-  for (var i = 0; i < commits.length; i++) {
-    var entry = document.createElement('div');
-    entry.className = 'git-log-entry';
-    var hash = document.createElement('span');
-    hash.className = 'git-log-hash';
-    hash.textContent = commits[i].hash;
-    var msg = document.createElement('span');
-    msg.className = 'git-log-msg';
-    msg.textContent = commits[i].message;
-    entry.appendChild(hash);
-    entry.appendChild(msg);
-    list.appendChild(entry);
-  }
-
-  section.appendChild(list);
-
-  header.addEventListener('click', function () {
-    var collapsed = list.style.display === 'none';
-    list.style.display = collapsed ? 'block' : 'none';
-    arrow.textContent = collapsed ? '\u25BE' : '\u25B8';
-  });
-
   return section;
 }
 
@@ -2520,7 +2488,27 @@ function isGitTabActive() {
     !explorerPanel.classList.contains('collapsed');
 }
 
-function createGitSection(title, files, isStaged) {
+function buildFileTree(files) {
+  var root = { folders: {}, files: [] };
+  for (var i = 0; i < files.length; i++) {
+    var parts = files[i].file.replace(/\\/g, '/').split('/');
+    var node = root;
+    for (var p = 0; p < parts.length - 1; p++) {
+      if (!node.folders[parts[p]]) node.folders[parts[p]] = { folders: {}, files: [] };
+      node = node.folders[parts[p]];
+    }
+    node.files.push(files[i]);
+  }
+  return root;
+}
+
+function countTreeFiles(node) {
+  var count = node.files.length;
+  for (var k in node.folders) count += countTreeFiles(node.folders[k]);
+  return count;
+}
+
+function createGitSection(title, files, isStaged, stats) {
   var section = document.createElement('div');
   section.className = 'git-section';
 
@@ -2562,9 +2550,15 @@ function createGitSection(title, files, isStaged) {
   var list = document.createElement('div');
   list.className = 'git-section-list';
 
-  for (var i = 0; i < files.length; i++) {
-    list.appendChild(createGitFileRow(files[i], isStaged));
+  var statsMap = {};
+  if (stats) {
+    for (var s = 0; s < stats.length; s++) {
+      statsMap[stats[s].file] = stats[s];
+    }
   }
+  var tree = buildFileTree(files);
+  renderFileTreeNode(list, tree, isStaged, statsMap, 0);
+
   section.appendChild(list);
 
   header.addEventListener('click', function () {
@@ -2576,12 +2570,62 @@ function createGitSection(title, files, isStaged) {
   return section;
 }
 
-function createGitFileRow(file, isStaged) {
+function renderFileTreeNode(container, node, isStaged, statsMap, depth) {
+  var folderNames = Object.keys(node.folders).sort();
+  for (var f = 0; f < folderNames.length; f++) {
+    (function (folderName) {
+      var folder = node.folders[folderName];
+      var folderEl = document.createElement('div');
+      folderEl.className = 'git-tree-folder';
+
+      var folderHeader = document.createElement('div');
+      folderHeader.className = 'git-tree-folder-header';
+      folderHeader.style.paddingLeft = (8 + depth * 12) + 'px';
+
+      var folderArrow = document.createElement('span');
+      folderArrow.className = 'git-tree-arrow';
+      folderArrow.textContent = '\u25BE';
+
+      var folderLabel = document.createElement('span');
+      folderLabel.className = 'git-tree-folder-name';
+      folderLabel.textContent = folderName + '/';
+
+      var folderCount = document.createElement('span');
+      folderCount.className = 'git-tree-count';
+      folderCount.textContent = countTreeFiles(folder);
+
+      folderHeader.appendChild(folderArrow);
+      folderHeader.appendChild(folderLabel);
+      folderHeader.appendChild(folderCount);
+      folderEl.appendChild(folderHeader);
+
+      var folderContent = document.createElement('div');
+      folderContent.className = 'git-tree-folder-content';
+      renderFileTreeNode(folderContent, folder, isStaged, statsMap, depth + 1);
+      folderEl.appendChild(folderContent);
+
+      folderHeader.addEventListener('click', function () {
+        var collapsed = folderContent.style.display === 'none';
+        folderContent.style.display = collapsed ? '' : 'none';
+        folderArrow.textContent = collapsed ? '\u25BE' : '\u25B8';
+      });
+
+      container.appendChild(folderEl);
+    })(folderNames[f]);
+  }
+
+  for (var i = 0; i < node.files.length; i++) {
+    container.appendChild(createGitFileRow(node.files[i], isStaged, statsMap, depth));
+  }
+}
+
+function createGitFileRow(file, isStaged, statsMap, depth) {
   var container = document.createElement('div');
   container.className = 'git-file-container';
 
   var row = document.createElement('div');
   row.className = 'git-file';
+  row.style.paddingLeft = (8 + (depth || 0) * 12) + 'px';
 
   var statusEl = document.createElement('span');
   statusEl.className = 'git-status git-status-' + gitStatusClass(file.status);
@@ -2589,54 +2633,36 @@ function createGitFileRow(file, isStaged) {
 
   var nameEl = document.createElement('span');
   nameEl.className = 'git-filename';
-  nameEl.textContent = file.file;
-  nameEl.title = 'Click to view diff';
+  var parts = file.file.replace(/\\/g, '/').split('/');
+  nameEl.textContent = parts[parts.length - 1];
+  nameEl.title = file.file + ' — Click to view diff';
 
-  // Click filename to toggle diff
   nameEl.addEventListener('click', function (e) {
     e.stopPropagation();
-    var diffKey = (isStaged ? 'staged:' : 'unstaged:') + file.file;
-    var existingDiff = container.querySelector('.git-diff-content');
-    if (existingDiff) {
-      existingDiff.remove();
-      gitExpandedDiff = null;
-      return;
-    }
-    // Close any other open diff
-    var allDiffs = gitChangesEl.querySelectorAll('.git-diff-content');
-    for (var d = 0; d < allDiffs.length; d++) allDiffs[d].remove();
-
-    gitExpandedDiff = diffKey;
-    var diffEl = document.createElement('pre');
-    diffEl.className = 'git-diff-content';
-    diffEl.textContent = 'Loading...';
-    container.appendChild(diffEl);
-
-    window.electronAPI.gitDiff(activeProjectKey, file.file, isStaged).then(function (diffText) {
-      diffEl.textContent = '';
-      if (!diffText || !diffText.trim()) {
-        diffEl.textContent = '(no diff available)';
-        return;
-      }
-      var lines = diffText.split('\n');
-      for (var li = 0; li < lines.length; li++) {
-        var span = document.createElement('span');
-        var line = lines[li];
-        if (line.startsWith('+++') || line.startsWith('---')) {
-          span.className = 'diff-meta';
-        } else if (line.startsWith('+')) {
-          span.className = 'diff-add';
-        } else if (line.startsWith('-')) {
-          span.className = 'diff-del';
-        } else if (line.startsWith('@@')) {
-          span.className = 'diff-hunk';
-        }
-        span.textContent = line;
-        diffEl.appendChild(span);
-        if (li < lines.length - 1) diffEl.appendChild(document.createTextNode('\n'));
-      }
-    });
+    addDiffColumn({
+      filePath: file.file,
+      staged: isStaged,
+      status: file.status
+    }, { title: parts[parts.length - 1] + ' (' + file.status + ')' });
   });
+
+  var statEl = document.createElement('span');
+  statEl.className = 'git-file-stat';
+  var fileStat = statsMap ? statsMap[file.file] : null;
+  if (fileStat) {
+    if (fileStat.insertions > 0) {
+      var addStat = document.createElement('span');
+      addStat.className = 'git-stat-add';
+      addStat.textContent = '+' + fileStat.insertions;
+      statEl.appendChild(addStat);
+    }
+    if (fileStat.deletions > 0) {
+      var delStat = document.createElement('span');
+      delStat.className = 'git-stat-del';
+      delStat.textContent = '\u2212' + fileStat.deletions;
+      statEl.appendChild(delStat);
+    }
+  }
 
   var actions = document.createElement('span');
   actions.className = 'git-file-actions';
@@ -2668,6 +2694,7 @@ function createGitFileRow(file, isStaged) {
 
   row.appendChild(statusEl);
   row.appendChild(nameEl);
+  row.appendChild(statEl);
   row.appendChild(actions);
   container.appendChild(row);
   return container;
