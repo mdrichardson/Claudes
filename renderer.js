@@ -1121,6 +1121,373 @@ function addRow() {
   addColumn(null, row);
 }
 
+// ============================================================
+// Diff Column
+// ============================================================
+
+function parseDiff(diffText) {
+  var hunks = [];
+  if (!diffText || !diffText.trim()) return { hunks: hunks };
+  var lines = diffText.split('\n');
+  var currentHunk = null;
+  var oldLine = 0;
+  var newLine = 0;
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    var hunkMatch = line.match(/^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@(.*)/);
+    if (hunkMatch) {
+      currentHunk = {
+        oldStart: parseInt(hunkMatch[1]),
+        oldCount: parseInt(hunkMatch[2]) || 1,
+        newStart: parseInt(hunkMatch[3]),
+        newCount: parseInt(hunkMatch[4]) || 1,
+        header: line,
+        lines: []
+      };
+      oldLine = currentHunk.oldStart;
+      newLine = currentHunk.newStart;
+      hunks.push(currentHunk);
+      continue;
+    }
+    if (!currentHunk) continue;
+    if (line.startsWith('+')) {
+      currentHunk.lines.push({ type: 'add', content: line.substring(1), oldLine: null, newLine: newLine++ });
+    } else if (line.startsWith('-')) {
+      currentHunk.lines.push({ type: 'del', content: line.substring(1), oldLine: oldLine++, newLine: null });
+    } else if (line.startsWith('\\')) {
+      // "\ No newline at end of file" — skip
+    } else {
+      currentHunk.lines.push({ type: 'context', content: line.length > 0 ? line.substring(1) : '', oldLine: oldLine++, newLine: newLine++ });
+    }
+  }
+  return { hunks: hunks };
+}
+
+function addDiffColumn(diffData, opts) {
+  opts = opts || {};
+  if (!activeProjectKey) return;
+
+  var state = getActiveState();
+  if (!state) return;
+
+  // Deduplication check
+  var existingId = null;
+  state.columns.forEach(function (col, id) {
+    if (!col.isDiff) return;
+    if (diffData.commitHash && col.diffData.commitHash === diffData.commitHash && col.diffData.filePath === diffData.filePath) existingId = id;
+    if (!diffData.commitHash && !col.diffData.commitHash && col.diffData.filePath === diffData.filePath && col.diffData.staged === diffData.staged) existingId = id;
+  });
+  if (existingId !== null) {
+    var existingCol = allColumns.get(existingId);
+    if (existingCol) existingCol.element.scrollIntoView({ behavior: 'smooth' });
+    return;
+  }
+
+  var row = getActiveRow(state);
+  if (!row) row = addRowToProject(state);
+
+  var id = ++globalColumnId;
+  var col = document.createElement('div');
+  col.className = 'column diff-column';
+  col.id = 'col-' + id;
+  col.style.flex = '1';
+
+  var title = opts.title || diffData.filePath || 'Diff';
+  var header = createColumnHeader(id, title, { isDiff: true });
+
+  // Diff mode toggle button
+  var toggleBtn = document.createElement('span');
+  toggleBtn.className = 'col-action diff-toggle';
+  toggleBtn.title = 'Toggle unified/split view';
+  toggleBtn.textContent = '\u2194';
+  var headerActions = header.querySelector('.col-actions');
+  headerActions.insertBefore(toggleBtn, headerActions.firstChild);
+
+  var diffBody = document.createElement('div');
+  diffBody.className = 'diff-body';
+
+  col.appendChild(header);
+  col.appendChild(diffBody);
+
+  // Add resize handle if not the first column
+  if (row.columnIds.length > 0) {
+    var handle = document.createElement('div');
+    handle.className = 'resize-handle';
+    row.rowEl.appendChild(handle);
+    setupResizeHandle(handle);
+  }
+
+  row.rowEl.appendChild(col);
+
+  var colData = {
+    element: col,
+    terminal: null,
+    isDiff: true,
+    diffData: diffData,
+    diffMode: 'unified',
+    headerEl: header,
+    cwd: activeProjectKey,
+    projectKey: activeProjectKey,
+    customTitle: title,
+    createdAt: Date.now()
+  };
+
+  row.columnIds.push(id);
+  state.columns.set(id, colData);
+  allColumns.set(id, colData);
+
+  // Toggle button handler
+  toggleBtn.addEventListener('click', function () {
+    colData.diffMode = colData.diffMode === 'unified' ? 'split' : 'unified';
+    toggleBtn.textContent = colData.diffMode === 'unified' ? '\u2194' : '\u2016';
+    renderDiffContent(diffBody, colData);
+  });
+
+  // Close button handler
+  header.querySelector('.col-close').addEventListener('click', function () {
+    removeColumn(id);
+  });
+
+  // Render diff content
+  if (diffData.diffText) {
+    renderDiffContent(diffBody, colData);
+  } else if (diffData.commitHash) {
+    loadCommitDiff(diffBody, colData);
+  } else {
+    loadWorkingDiff(diffBody, colData);
+  }
+
+  setFocusedColumn(id);
+  saveColumnCounts();
+  renderProjectList();
+}
+
+function loadWorkingDiff(diffBody, colData) {
+  diffBody.textContent = 'Loading...';
+  window.electronAPI.gitDiff(activeProjectKey, colData.diffData.filePath, colData.diffData.staged || false).then(function (text) {
+    colData.diffData.diffText = text;
+    colData.diffData.parsed = parseDiff(text);
+    renderDiffContent(diffBody, colData);
+  });
+}
+
+function loadCommitDiff(diffBody, colData) {
+  diffBody.textContent = 'Loading...';
+  var hash = colData.diffData.commitHash;
+
+  if (colData.diffData.filePath) {
+    window.electronAPI.gitDiffCommit(activeProjectKey, hash, colData.diffData.filePath).then(function (text) {
+      colData.diffData.diffText = text;
+      colData.diffData.parsed = parseDiff(text);
+      renderDiffContent(diffBody, colData);
+    });
+  } else {
+    window.electronAPI.gitCommitDetail(activeProjectKey, hash).then(function (detail) {
+      colData.diffData.commitDetail = detail;
+      colData.diffData.files = detail.files || [];
+      if (detail.files.length > 0) {
+        colData.diffData.activeFile = detail.files[0].file;
+        return window.electronAPI.gitDiffCommit(activeProjectKey, hash, detail.files[0].file);
+      }
+      return '';
+    }).then(function (text) {
+      colData.diffData.diffText = text;
+      colData.diffData.parsed = parseDiff(text);
+      renderDiffContent(diffBody, colData);
+    });
+  }
+}
+
+function renderDiffContent(diffBody, colData) {
+  while (diffBody.firstChild) diffBody.removeChild(diffBody.firstChild);
+  var parsed = colData.diffData.parsed;
+  if (!parsed || parsed.hunks.length === 0) {
+    var empty = document.createElement('div');
+    empty.className = 'diff-empty';
+    empty.textContent = '(no changes)';
+    diffBody.appendChild(empty);
+    return;
+  }
+
+  // File tabs for multi-file commit diffs
+  if (colData.diffData.commitDetail && colData.diffData.files && colData.diffData.files.length > 1) {
+    var tabBar = document.createElement('div');
+    tabBar.className = 'diff-file-tabs';
+    for (var t = 0; t < colData.diffData.files.length; t++) {
+      (function (fileInfo) {
+        var tab = document.createElement('button');
+        tab.className = 'diff-file-tab' + (fileInfo.file === colData.diffData.activeFile ? ' active' : '');
+        tab.textContent = fileInfo.file.split('/').pop();
+        tab.title = fileInfo.file;
+        tab.addEventListener('click', function () {
+          colData.diffData.activeFile = fileInfo.file;
+          diffBody.textContent = 'Loading...';
+          window.electronAPI.gitDiffCommit(activeProjectKey, colData.diffData.commitHash, fileInfo.file).then(function (text) {
+            colData.diffData.diffText = text;
+            colData.diffData.parsed = parseDiff(text);
+            renderDiffContent(diffBody, colData);
+          });
+        });
+        tabBar.appendChild(tab);
+      })(colData.diffData.files[t]);
+    }
+    diffBody.appendChild(tabBar);
+  }
+
+  var container = document.createElement('div');
+  container.className = 'diff-content';
+  if (colData.diffMode === 'split') {
+    renderSplitDiff(container, parsed);
+  } else {
+    renderUnifiedDiff(container, parsed);
+  }
+  diffBody.appendChild(container);
+
+  var totalLines = 0;
+  for (var h = 0; h < parsed.hunks.length; h++) totalLines += parsed.hunks[h].lines.length;
+  if (totalLines > 5000) {
+    var warn = document.createElement('div');
+    warn.className = 'diff-truncated';
+    warn.textContent = 'Diff too large — showing first 5000 lines';
+    diffBody.appendChild(warn);
+  }
+}
+
+function renderUnifiedDiff(container, parsed) {
+  for (var h = 0; h < parsed.hunks.length; h++) {
+    var hunk = parsed.hunks[h];
+    var hunkHeader = document.createElement('div');
+    hunkHeader.className = 'diff-hunk-header';
+    hunkHeader.textContent = hunk.header;
+    container.appendChild(hunkHeader);
+
+    for (var i = 0; i < hunk.lines.length && i < 5000; i++) {
+      var lineData = hunk.lines[i];
+      var row = document.createElement('div');
+      row.className = 'diff-line diff-line-' + lineData.type;
+
+      var oldNum = document.createElement('span');
+      oldNum.className = 'diff-line-num';
+      oldNum.textContent = lineData.oldLine !== null ? lineData.oldLine : '';
+
+      var newNum = document.createElement('span');
+      newNum.className = 'diff-line-num';
+      newNum.textContent = lineData.newLine !== null ? lineData.newLine : '';
+
+      var prefix = document.createElement('span');
+      prefix.className = 'diff-line-prefix';
+      prefix.textContent = lineData.type === 'add' ? '+' : lineData.type === 'del' ? '-' : ' ';
+
+      var content = document.createElement('span');
+      content.className = 'diff-line-content';
+      content.textContent = lineData.content;
+
+      row.appendChild(oldNum);
+      row.appendChild(newNum);
+      row.appendChild(prefix);
+      row.appendChild(content);
+      container.appendChild(row);
+    }
+  }
+}
+
+function renderSplitDiff(container, parsed) {
+  var leftPanel = document.createElement('div');
+  leftPanel.className = 'diff-split-panel diff-split-left';
+  var rightPanel = document.createElement('div');
+  rightPanel.className = 'diff-split-panel diff-split-right';
+
+  for (var h = 0; h < parsed.hunks.length; h++) {
+    var hunk = parsed.hunks[h];
+    var lhdr = document.createElement('div');
+    lhdr.className = 'diff-hunk-header';
+    lhdr.textContent = hunk.header;
+    leftPanel.appendChild(lhdr);
+    var rhdr = document.createElement('div');
+    rhdr.className = 'diff-hunk-header';
+    rhdr.textContent = hunk.header;
+    rightPanel.appendChild(rhdr);
+
+    var delQueue = [];
+    var addQueue = [];
+    function flushQueues() {
+      var maxLen = Math.max(delQueue.length, addQueue.length);
+      for (var q = 0; q < maxLen; q++) {
+        var ld = delQueue[q];
+        var la = addQueue[q];
+        var leftRow = document.createElement('div');
+        leftRow.className = 'diff-line ' + (ld ? 'diff-line-del' : 'diff-line-empty');
+        var leftNum = document.createElement('span');
+        leftNum.className = 'diff-line-num';
+        leftNum.textContent = ld ? ld.oldLine : '';
+        var leftContent = document.createElement('span');
+        leftContent.className = 'diff-line-content';
+        leftContent.textContent = ld ? ld.content : '';
+        leftRow.appendChild(leftNum);
+        leftRow.appendChild(leftContent);
+        leftPanel.appendChild(leftRow);
+
+        var rightRow = document.createElement('div');
+        rightRow.className = 'diff-line ' + (la ? 'diff-line-add' : 'diff-line-empty');
+        var rightNum = document.createElement('span');
+        rightNum.className = 'diff-line-num';
+        rightNum.textContent = la ? la.newLine : '';
+        var rightContent = document.createElement('span');
+        rightContent.className = 'diff-line-content';
+        rightContent.textContent = la ? la.content : '';
+        rightRow.appendChild(rightNum);
+        rightRow.appendChild(rightContent);
+        rightPanel.appendChild(rightRow);
+      }
+      delQueue = [];
+      addQueue = [];
+    }
+
+    for (var i = 0; i < hunk.lines.length; i++) {
+      var line = hunk.lines[i];
+      if (line.type === 'del') {
+        delQueue.push(line);
+      } else if (line.type === 'add') {
+        addQueue.push(line);
+      } else {
+        flushQueues();
+        var cl = document.createElement('div');
+        cl.className = 'diff-line diff-line-context';
+        var cln = document.createElement('span');
+        cln.className = 'diff-line-num';
+        cln.textContent = line.oldLine;
+        var clc = document.createElement('span');
+        clc.className = 'diff-line-content';
+        clc.textContent = line.content;
+        cl.appendChild(cln);
+        cl.appendChild(clc);
+        leftPanel.appendChild(cl);
+
+        var cr = document.createElement('div');
+        cr.className = 'diff-line diff-line-context';
+        var crn = document.createElement('span');
+        crn.className = 'diff-line-num';
+        crn.textContent = line.newLine;
+        var crc = document.createElement('span');
+        crc.className = 'diff-line-content';
+        crc.textContent = line.content;
+        cr.appendChild(crn);
+        cr.appendChild(crc);
+        rightPanel.appendChild(cr);
+      }
+    }
+    flushQueues();
+  }
+
+  container.classList.add('diff-split-container');
+  container.appendChild(leftPanel);
+  container.appendChild(rightPanel);
+
+  leftPanel.addEventListener('scroll', function () { rightPanel.scrollTop = leftPanel.scrollTop; });
+  rightPanel.addEventListener('scroll', function () { leftPanel.scrollTop = rightPanel.scrollTop; });
+}
+
 function fetchAndSetSessionTitle(columnId, projectPath, sessionId) {
   if (!window.electronAPI || !window.electronAPI.getSessionTitle) return;
   var col = allColumns.get(columnId);
