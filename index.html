@@ -44,11 +44,36 @@
           <div id="git-changes"></div>
         </div>
         <div id="tab-run" class="tab-content">
-          <div class="explorer-section-header">
-            <span>RUN AND DEBUG</span>
-            <button class="explorer-refresh" id="btn-refresh-run" title="Refresh">&#8635;</button>
+          <div id="run-list-view">
+            <div class="explorer-section-header">
+              <span>LAUNCH CONFIGURATIONS</span>
+              <div style="display:flex;gap:4px;">
+                <button class="explorer-refresh" id="btn-add-run-config" title="Add Configuration">+</button>
+                <button class="explorer-refresh" id="btn-refresh-run" title="Refresh">&#8635;</button>
+              </div>
+            </div>
+            <div id="run-configs"></div>
           </div>
-          <div id="run-configs"></div>
+          <div id="run-editor-view" class="hidden">
+            <div class="run-editor-header">
+              <button id="btn-run-editor-back" class="run-editor-back" title="Back">&larr;</button>
+              <span id="run-editor-title">New Configuration</span>
+            </div>
+            <div id="run-editor-form" class="run-editor-form"></div>
+            <div class="run-editor-footer">
+              <button id="btn-run-save" class="run-editor-btn run-editor-save">Save</button>
+              <button id="btn-run-cancel" class="run-editor-btn">Cancel</button>
+              <button id="btn-run-delete" class="run-editor-btn run-editor-delete">Delete</button>
+            </div>
+          </div>
+          <div id="run-profiles-view" class="hidden">
+            <div class="run-editor-header">
+              <button id="btn-profiles-back" class="run-editor-back" title="Back">&larr;</button>
+              <span>Environment Profiles</span>
+            </div>
+            <div id="run-profiles-list"></div>
+            <div id="run-profile-editor"></div>
+          </div>
         </div>
       </div>
     </div>
