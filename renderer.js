@@ -1216,11 +1216,11 @@ function addDiffColumn(diffData, opts) {
   if (row.columnIds.length > 0) {
     var handle = document.createElement('div');
     handle.className = 'resize-handle';
-    row.rowEl.appendChild(handle);
+    row.el.appendChild(handle);
     setupResizeHandle(handle);
   }
 
-  row.rowEl.appendChild(col);
+  row.el.appendChild(col);
 
   var colData = {
     element: col,
