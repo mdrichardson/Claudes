@@ -1700,6 +1700,8 @@ var runProfileEditor = document.getElementById('run-profile-editor');
 var runCachedData = null; // { configs, envProfiles }
 var runEditingConfig = null; // config being edited, or null for new
 var runEditingIndex = -1; // index in custom configs array, or -1 for new
+var runEditingOriginalName = null; // original name at edit time, for matching on save
+var runEditingOriginalType = null;
 
 // Tab switching
 document.querySelectorAll('.explorer-tab').forEach(function (tab) {
@@ -1711,7 +1713,7 @@ document.querySelectorAll('.explorer-tab').forEach(function (tab) {
     document.getElementById('tab-' + tabName).classList.add('active');
     if (tabName === 'files') { stopGitPolling(); refreshFileTree(); }
     else if (tabName === 'git') { refreshGitStatus(true); startGitPolling(); }
-    else if (tabName === 'run') { stopGitPolling(); refreshRunConfigs(); }
+    else if (tabName === 'run') { stopGitPolling(); showRunListView(); refreshRunConfigs(); }
   });
 });
 
@@ -1749,6 +1751,37 @@ function toggleExplorer() {
 // File Tree
 // ============================================================
 
+function showFileTreeContextMenu(e, entry) {
+  var existing = document.querySelector('.file-tree-context-menu');
+  if (existing) existing.remove();
+
+  var menu = document.createElement('div');
+  menu.className = 'file-tree-context-menu';
+  menu.style.left = e.clientX + 'px';
+  menu.style.top = e.clientY + 'px';
+
+  var showInExplorer = document.createElement('div');
+  showInExplorer.className = 'file-tree-context-item';
+  showInExplorer.textContent = 'See in Explorer';
+  showInExplorer.addEventListener('click', function () {
+    window.electronAPI.showItemInFolder(entry.path);
+    menu.remove();
+  });
+  menu.appendChild(showInExplorer);
+
+  document.body.appendChild(menu);
+
+  function closeMenu(ev) {
+    if (!menu.contains(ev.target)) {
+      menu.remove();
+      document.removeEventListener('mousedown', closeMenu);
+    }
+  }
+  setTimeout(function () {
+    document.addEventListener('mousedown', closeMenu);
+  }, 0);
+}
+
 function refreshFileTree() {
   if (!activeProjectKey || !window.electronAPI) return;
   while (fileTreeEl.firstChild) fileTreeEl.removeChild(fileTreeEl.firstChild);
@@ -1778,6 +1811,12 @@ function createTreeItem(entry, level) {
   row.appendChild(arrow);
   row.appendChild(name);
   item.appendChild(row);
+
+  row.addEventListener('contextmenu', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    showFileTreeContextMenu(e, entry);
+  });
 
   if (entry.isDirectory) {
     var children = document.createElement('div');
@@ -2534,10 +2573,14 @@ function openConfigEditor(config, isNew) {
   };
   if (isNew && !config) {
     runEditingIndex = -1;
+    runEditingOriginalName = null;
   } else if (isNew && config) {
     runEditingIndex = -1;
+    runEditingOriginalName = null;
   } else {
     runEditingIndex = findCustomConfigIndex(config);
+    runEditingOriginalName = config ? config.name : null;
+    runEditingOriginalType = config ? config.type : null;
   }
   runEditorTitle.textContent = isNew ? 'New Configuration' : 'Edit: ' + config.name;
   document.getElementById('btn-run-delete').classList.toggle('hidden', runEditingIndex < 0);
@@ -2945,13 +2988,17 @@ function resolveConfigEnv(config) {
   if (runCachedData && config.envProfile && runCachedData.envProfiles) {
     profile = runCachedData.envProfiles[config.envProfile];
   }
+  function resolveEnvPath(p) {
+    if (!p) return p;
+    return p.replace(/\$\{workspaceFolder\}/g, activeProjectKey);
+  }
 
   var p1 = (profile && profile._envFile)
-    ? window.electronAPI.readEnvFile(profile._envFile)
+    ? window.electronAPI.readEnvFile(resolveEnvPath(profile._envFile))
     : Promise.resolve({});
 
   var p2 = config.envFile
-    ? window.electronAPI.readEnvFile(config.envFile)
+    ? window.electronAPI.readEnvFile(resolveEnvPath(config.envFile))
     : Promise.resolve({});
 
   return Promise.all([p1, p2]).then(function (results) {
@@ -3053,7 +3100,7 @@ function launchConfig(config) {
       return;
     }
 
-    var launchUrl = config.applicationUrl || null;
+    var launchUrl = (config.openBrowserOnLaunch !== false && config.applicationUrl) ? config.applicationUrl : null;
     addColumn(cmdArgs, null, { cmd: cmd, title: config.name, cwd: cwd, env: env, launchUrl: launchUrl });
   });
 }
@@ -3115,8 +3162,18 @@ document.getElementById('btn-run-save').addEventListener('click', function () {
       delete copy._readonly;
       return copy;
     });
-    if (runEditingIndex >= 0 && runEditingIndex < customs.length) {
-      customs[runEditingIndex] = toSave;
+    // Match by original name+type in fresh data to avoid stale index
+    var matchIdx = -1;
+    if (runEditingOriginalName) {
+      for (var mi = 0; mi < customs.length; mi++) {
+        if (customs[mi].name === runEditingOriginalName && customs[mi].type === runEditingOriginalType) {
+          matchIdx = mi;
+          break;
+        }
+      }
+    }
+    if (matchIdx >= 0) {
+      customs[matchIdx] = toSave;
     } else {
       customs.push(toSave);
     }
@@ -3137,7 +3194,18 @@ document.getElementById('btn-run-delete').addEventListener('click', function () 
       delete copy._readonly;
       return copy;
     });
-    customs.splice(runEditingIndex, 1);
+    // Match by original name+type in fresh data to avoid stale index
+    var delIdx = -1;
+    if (runEditingOriginalName) {
+      for (var di = 0; di < customs.length; di++) {
+        if (customs[di].name === runEditingOriginalName && customs[di].type === runEditingOriginalType) {
+          delIdx = di;
+          break;
+        }
+      }
+    }
+    if (delIdx < 0) return;
+    customs.splice(delIdx, 1);
     return window.electronAPI.saveLaunchConfigs(activeProjectKey, customs);
   }).then(function () {
     showRunListView();
