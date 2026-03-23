@@ -1173,10 +1173,15 @@ function addDiffColumn(diffData, opts) {
   // Ensure container is visible
   state.containerEl.style.display = 'flex';
 
-  // Reuse existing diff column instead of creating new ones
+  // Two diff slots: one for file list (commit clicks), one for diff content (file clicks)
+  // Determine which slot this is
+  var isFileList = diffData.commitHash && !diffData.filePath;
+  var slotType = isFileList ? 'diffFileList' : 'diffContent';
+
+  // Find existing column of the same slot type and reuse it
   var existingDiffId = null;
   state.columns.forEach(function (col, id) {
-    if (col.isDiff) existingDiffId = id;
+    if (col.isDiff && col.diffSlot === slotType) existingDiffId = id;
   });
   if (existingDiffId !== null) {
     var existingCol = allColumns.get(existingDiffId);
@@ -1184,12 +1189,10 @@ function addDiffColumn(diffData, opts) {
       existingCol.diffData = diffData;
       existingCol.diffMode = existingCol.diffMode || 'unified';
       existingCol.customTitle = opts.title || diffData.filePath || 'Diff';
-      // Update header title
       var titleEl = existingCol.headerEl.querySelector('.col-title');
       if (titleEl) titleEl.textContent = existingCol.customTitle;
-      // Re-render content
       var diffBody = existingCol.element.querySelector('.diff-body');
-      if (diffData.commitHash && !diffData.filePath) {
+      if (isFileList) {
         loadCommitDiff(diffBody, existingCol);
       } else if (diffData.diffText) {
         existingCol.diffData.parsed = parseDiff(diffData.diffText);
@@ -1243,6 +1246,7 @@ function addDiffColumn(diffData, opts) {
     element: col,
     terminal: null,
     isDiff: true,
+    diffSlot: slotType,
     diffData: diffData,
     diffMode: 'unified',
     headerEl: header,
@@ -1350,15 +1354,12 @@ function renderCommitFileList(diffBody, colData) {
       var row = document.createElement('div');
       row.className = 'diff-file-list-item';
       row.addEventListener('click', function () {
-        // Load this file's diff
-        colData.diffData.activeFile = fileInfo.file;
-        colData.diffData.filePath = fileInfo.file;
-        diffBody.textContent = 'Loading...';
-        window.electronAPI.gitDiffCommit(activeProjectKey, colData.diffData.commitHash, fileInfo.file).then(function (text) {
-          colData.diffData.diffText = text;
-          colData.diffData.parsed = parseDiff(text);
-          renderDiffContent(diffBody, colData);
-        });
+        // Open this file's diff in the diff content column
+        addDiffColumn({
+          commitHash: colData.diffData.commitHash,
+          filePath: fileInfo.file,
+          status: 'M'
+        }, { title: fileInfo.file.split('/').pop() });
       });
 
       var nameEl = document.createElement('span');
