@@ -1834,15 +1834,26 @@ html, body {
   background: var(--hover-subtle);
 }
 
-.run-play-btn {
+.run-play-btn,
+.run-stop-btn,
+.run-restart-btn {
   background: none;
   border: none;
-  color: #4ec94e;
-  font-size: 16px;
   cursor: pointer;
-  padding: 3px 5px;
+  padding: 2px 3px;
   border-radius: 3px;
   flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.run-play-btn {
+  color: #4ec94e;
+  font-size: 14px;
 }
 
 .run-play-btn:hover {
@@ -1856,20 +1867,14 @@ html, body {
 
 .run-controls {
   display: flex;
-  gap: 1px;
+  gap: 0;
   flex-shrink: 0;
   align-items: center;
 }
 
 .run-stop-btn {
-  background: none;
-  border: none;
   color: #e63946;
-  font-size: 16px;
-  cursor: pointer;
-  padding: 3px 5px;
-  border-radius: 3px;
-  flex-shrink: 0;
+  font-size: 12px;
 }
 
 .run-stop-btn:hover {
@@ -1878,14 +1883,8 @@ html, body {
 }
 
 .run-restart-btn {
-  background: none;
-  border: none;
   color: #e6a817;
-  font-size: 18px;
-  cursor: pointer;
-  padding: 3px 5px;
-  border-radius: 3px;
-  flex-shrink: 0;
+  font-size: 14px;
 }
 
 .run-restart-btn:hover {
