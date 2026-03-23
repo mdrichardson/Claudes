@@ -2504,13 +2504,46 @@ function refreshRunConfigs() {
         (function (config) {
           var item = document.createElement('div');
           item.className = 'run-config-item';
+          var runningId = findRunningColumn(config.name);
+          var isRunning = runningId !== null;
+
+          // Run controls group
+          var controls = document.createElement('div');
+          controls.className = 'run-controls';
+
           var playBtn = document.createElement('button');
           playBtn.className = 'run-play-btn';
           playBtn.textContent = '\u25B6';
           playBtn.title = 'Run ' + config.name;
+          if (isRunning) playBtn.classList.add('dimmed');
           playBtn.addEventListener('click', function () { launchConfig(config); });
+          controls.appendChild(playBtn);
+
+          if (isRunning) {
+            var stopBtn = document.createElement('button');
+            stopBtn.className = 'run-stop-btn';
+            stopBtn.textContent = '\u25A0';
+            stopBtn.title = 'Stop';
+            stopBtn.addEventListener('click', function () {
+              removeColumn(findRunningColumn(config.name));
+              setTimeout(refreshRunConfigs, 300);
+            });
+            controls.appendChild(stopBtn);
+
+            var restartBtn = document.createElement('button');
+            restartBtn.className = 'run-restart-btn';
+            restartBtn.textContent = '\u21bb';
+            restartBtn.title = 'Restart';
+            restartBtn.addEventListener('click', function () {
+              var rid = findRunningColumn(config.name);
+              if (rid !== null) removeColumn(rid);
+              setTimeout(function () { launchConfig(config); }, 500);
+            });
+            controls.appendChild(restartBtn);
+          }
+
           var nameEl = document.createElement('span');
-          nameEl.className = 'run-config-name';
+          nameEl.className = 'run-config-name' + (isRunning ? ' running' : '');
           nameEl.textContent = config.name;
           nameEl.style.cursor = 'pointer';
           nameEl.addEventListener('click', function () {
@@ -2542,7 +2575,7 @@ function refreshRunConfigs() {
             editBtn.addEventListener('click', function () { openConfigEditor(config); });
             actions.appendChild(editBtn);
           }
-          item.appendChild(playBtn);
+          item.appendChild(controls);
           item.appendChild(nameEl);
           item.appendChild(typeEl);
           item.appendChild(actions);

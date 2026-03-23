@@ -1339,6 +1339,29 @@ html, body {
   border-bottom: 1px solid var(--border-subtle);
 }
 
+.explorer-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.explorer-header-btn {
+  background: none;
+  border: none;
+  color: var(--text-dimmer);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+}
+
+.explorer-header-btn:hover {
+  background: var(--hover-intense);
+  color: var(--text-primary);
+}
+
 .explorer-refresh {
   background: none;
   border: none;
@@ -1825,6 +1848,52 @@ html, body {
 .run-play-btn:hover {
   background: var(--hover-green);
   color: var(--color-green-bright);
+}
+
+.run-play-btn.dimmed {
+  opacity: 0.3;
+}
+
+.run-controls {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.run-stop-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.run-stop-btn:hover {
+  background: rgba(230,57,70,0.15);
+}
+
+.run-restart-btn {
+  background: none;
+  border: none;
+  color: var(--color-green);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.run-restart-btn:hover {
+  background: var(--hover-green);
+  color: var(--color-green-bright);
+}
+
+.run-config-name.running {
+  color: var(--color-green);
 }
 
 .run-config-name {
