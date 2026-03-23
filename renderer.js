@@ -1197,6 +1197,8 @@ function addDiffColumn(diffData, opts) {
       } else if (diffData.diffText) {
         existingCol.diffData.parsed = parseDiff(diffData.diffText);
         renderDiffContent(diffBody, existingCol);
+      } else if (diffData.commitHash) {
+        loadCommitDiff(diffBody, existingCol);
       } else {
         loadWorkingDiff(diffBody, existingCol);
       }
