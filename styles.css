@@ -1865,6 +1865,82 @@ html, body {
   color: var(--accent);
 }
 
+/* Commit Graph */
+
+.git-graph-list {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.git-graph-row {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding-right: 8px;
+  cursor: pointer;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.git-graph-row:hover {
+  background: var(--hover-subtle);
+}
+
+.git-graph-hash {
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 11px;
+  color: var(--text-dimmer);
+  flex-shrink: 0;
+  width: 44px;
+}
+
+.git-graph-msg {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-body);
+}
+
+.git-graph-refs {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.git-graph-ref {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(233, 69, 96, 0.15);
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.git-graph-tag {
+  background: rgba(0, 200, 200, 0.15);
+  color: var(--color-cyan);
+}
+
+.git-graph-author {
+  font-size: 11px;
+  color: var(--text-dimmer);
+  flex-shrink: 0;
+  width: 55px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-graph-date {
+  font-size: 10px;
+  color: var(--text-dimmer);
+  flex-shrink: 0;
+  width: 55px;
+  text-align: right;
+  white-space: nowrap;
+}
+
 .git-empty,
 .run-empty {
   padding: 20px 12px;

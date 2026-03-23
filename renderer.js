@@ -2459,17 +2459,202 @@ function showBranchCreateInput(dropdown, currentBranch) {
   input.focus();
 }
 
+var GRAPH_LANE_COLORS = ['var(--accent)', 'var(--color-green)', 'var(--color-cyan)', 'var(--accent)', 'var(--color-green)'];
+var GRAPH_ROW_HEIGHT = 28;
+var GRAPH_LANE_WIDTH = 10;
+var GRAPH_PADDING = 8;
+
+function computeGraphLanes(commits, existingState) {
+  var lanes = existingState ? existingState.lanes.slice() : [];
+  var commitLanes = existingState ? JSON.parse(JSON.stringify(existingState.commitLanes)) : {};
+
+  function findFreeLane() {
+    for (var i = 0; i < lanes.length; i++) {
+      if (lanes[i] === null) return i;
+    }
+    lanes.push(null);
+    return lanes.length - 1;
+  }
+
+  for (var c = 0; c < commits.length; c++) {
+    var commit = commits[c];
+    var myLane;
+    commit.mergeFromLanes = [];
+
+    if (commitLanes[commit.hash] !== undefined) {
+      myLane = commitLanes[commit.hash];
+    } else {
+      myLane = findFreeLane();
+      lanes[myLane] = commit.hash;
+    }
+    commit.lane = myLane;
+    commit.activeLanes = lanes.slice();
+
+    if (commit.parents.length === 0) {
+      lanes[myLane] = null;
+    } else if (commit.parents.length === 1) {
+      lanes[myLane] = commit.parents[0];
+      commitLanes[commit.parents[0]] = myLane;
+    } else {
+      lanes[myLane] = commit.parents[0];
+      commitLanes[commit.parents[0]] = myLane;
+      for (var p = 1; p < commit.parents.length; p++) {
+        var parent = commit.parents[p];
+        if (commitLanes[parent] !== undefined) {
+          commit.mergeFromLanes.push(commitLanes[parent]);
+        } else {
+          var parentLane = findFreeLane();
+          lanes[parentLane] = parent;
+          commitLanes[parent] = parentLane;
+          commit.mergeFromLanes.push(parentLane);
+        }
+      }
+    }
+
+    while (lanes.length > 5) {
+      var last = lanes.length - 1;
+      if (lanes[last] !== null) {
+        if (commit.lane === last) commit.lane = 4;
+        commitLanes[lanes[last]] = 4;
+        lanes[4] = lanes[last];
+      }
+      lanes.pop();
+    }
+  }
+
+  return { commits: commits, lanes: lanes, commitLanes: commitLanes };
+}
+
+function renderGraphSvg(commit) {
+  var maxLanes = 0;
+  for (var a = 0; a < commit.activeLanes.length; a++) {
+    if (commit.activeLanes[a] !== null) maxLanes = a + 1;
+  }
+  maxLanes = Math.max(maxLanes, commit.lane + 1);
+  var svgWidth = GRAPH_PADDING + maxLanes * GRAPH_LANE_WIDTH + GRAPH_PADDING;
+
+  var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', svgWidth);
+  svg.setAttribute('height', GRAPH_ROW_HEIGHT);
+  svg.style.flexShrink = '0';
+
+  var cy = GRAPH_ROW_HEIGHT / 2;
+
+  for (var i = 0; i < commit.activeLanes.length; i++) {
+    if (commit.activeLanes[i] === null) continue;
+    var lx = GRAPH_PADDING + i * GRAPH_LANE_WIDTH + GRAPH_LANE_WIDTH / 2;
+    var line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', lx);
+    line.setAttribute('y1', 0);
+    line.setAttribute('x2', lx);
+    line.setAttribute('y2', GRAPH_ROW_HEIGHT);
+    line.setAttribute('stroke', GRAPH_LANE_COLORS[i % GRAPH_LANE_COLORS.length]);
+    line.setAttribute('stroke-width', '2');
+    svg.appendChild(line);
+  }
+
+  for (var m = 0; m < commit.mergeFromLanes.length; m++) {
+    var fromLane = commit.mergeFromLanes[m];
+    var fromX = GRAPH_PADDING + fromLane * GRAPH_LANE_WIDTH + GRAPH_LANE_WIDTH / 2;
+    var toX = GRAPH_PADDING + commit.lane * GRAPH_LANE_WIDTH + GRAPH_LANE_WIDTH / 2;
+    var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', 'M' + fromX + ' 0 C ' + fromX + ' ' + cy + ' ' + toX + ' ' + cy + ' ' + toX + ' ' + cy);
+    path.setAttribute('stroke', GRAPH_LANE_COLORS[fromLane % GRAPH_LANE_COLORS.length]);
+    path.setAttribute('stroke-width', '2');
+    path.setAttribute('fill', 'none');
+    svg.appendChild(path);
+  }
+
+  var cx = GRAPH_PADDING + commit.lane * GRAPH_LANE_WIDTH + GRAPH_LANE_WIDTH / 2;
+  var circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  circle.setAttribute('cx', cx);
+  circle.setAttribute('cy', cy);
+  circle.setAttribute('r', '3');
+  circle.setAttribute('fill', GRAPH_LANE_COLORS[commit.lane % GRAPH_LANE_COLORS.length]);
+  svg.appendChild(circle);
+
+  return svg;
+}
+
 function createGitGraphSection(graphLog) {
-  // Placeholder — implemented in Task 6
+  var state = computeGraphLanes(graphLog, graphLaneState);
+  graphLaneState = { lanes: state.lanes, commitLanes: state.commitLanes };
+
   var section = document.createElement('div');
   section.className = 'git-section';
+
   var header = document.createElement('div');
   header.className = 'git-section-header';
+  var arrow = document.createElement('span');
+  arrow.className = 'git-section-arrow';
+  arrow.textContent = '\u25BE';
   var label = document.createElement('span');
   label.className = 'git-section-label';
   label.textContent = 'Commits (' + graphLog.length + ')';
+  header.appendChild(arrow);
   header.appendChild(label);
   section.appendChild(header);
+
+  var list = document.createElement('div');
+  list.className = 'git-section-list git-graph-list';
+
+  for (var i = 0; i < state.commits.length; i++) {
+    (function (commit) {
+      var row = document.createElement('div');
+      row.className = 'git-graph-row';
+      row.addEventListener('click', function () {
+        addDiffColumn({
+          commitHash: commit.hash,
+          filePath: null
+        }, { title: commit.abbrev + ' \u2014 ' + commit.message });
+      });
+
+      var svg = renderGraphSvg(commit);
+      row.appendChild(svg);
+
+      var hashEl = document.createElement('span');
+      hashEl.className = 'git-graph-hash';
+      hashEl.textContent = commit.abbrev;
+
+      var msgEl = document.createElement('span');
+      msgEl.className = 'git-graph-msg';
+      msgEl.textContent = commit.message;
+
+      var refsEl = document.createElement('span');
+      refsEl.className = 'git-graph-refs';
+      for (var r = 0; r < commit.refs.length; r++) {
+        var ref = commit.refs[r];
+        var badge = document.createElement('span');
+        badge.className = 'git-graph-ref' + (ref.startsWith('tag:') ? ' git-graph-tag' : '');
+        badge.textContent = ref.replace(/^HEAD -> /, '').replace(/^tag: /, '');
+        refsEl.appendChild(badge);
+      }
+
+      var authorEl = document.createElement('span');
+      authorEl.className = 'git-graph-author';
+      authorEl.textContent = commit.author;
+
+      var dateEl = document.createElement('span');
+      dateEl.className = 'git-graph-date';
+      dateEl.textContent = commit.relativeDate;
+
+      row.appendChild(hashEl);
+      row.appendChild(msgEl);
+      row.appendChild(refsEl);
+      row.appendChild(authorEl);
+      row.appendChild(dateEl);
+      list.appendChild(row);
+    })(state.commits[i]);
+  }
+
+  section.appendChild(list);
+
+  header.addEventListener('click', function () {
+    var collapsed = list.style.display === 'none';
+    list.style.display = collapsed ? '' : 'none';
+    arrow.textContent = collapsed ? '\u25BE' : '\u25B8';
+  });
+
   return section;
 }
 
