@@ -1173,16 +1173,33 @@ function addDiffColumn(diffData, opts) {
   // Ensure container is visible
   state.containerEl.style.display = 'flex';
 
-  // Deduplication check
-  var existingId = null;
+  // Reuse existing diff column instead of creating new ones
+  var existingDiffId = null;
   state.columns.forEach(function (col, id) {
-    if (!col.isDiff) return;
-    if (diffData.commitHash && col.diffData.commitHash === diffData.commitHash && col.diffData.filePath === diffData.filePath) existingId = id;
-    if (!diffData.commitHash && !col.diffData.commitHash && col.diffData.filePath === diffData.filePath && col.diffData.staged === diffData.staged) existingId = id;
+    if (col.isDiff) existingDiffId = id;
   });
-  if (existingId !== null) {
-    var existingCol = allColumns.get(existingId);
-    if (existingCol) existingCol.element.scrollIntoView({ behavior: 'smooth' });
+  if (existingDiffId !== null) {
+    var existingCol = allColumns.get(existingDiffId);
+    if (existingCol) {
+      existingCol.diffData = diffData;
+      existingCol.diffMode = existingCol.diffMode || 'unified';
+      existingCol.customTitle = opts.title || diffData.filePath || 'Diff';
+      // Update header title
+      var titleEl = existingCol.headerEl.querySelector('.col-title');
+      if (titleEl) titleEl.textContent = existingCol.customTitle;
+      // Re-render content
+      var diffBody = existingCol.element.querySelector('.diff-body');
+      if (diffData.commitHash && !diffData.filePath) {
+        loadCommitDiff(diffBody, existingCol);
+      } else if (diffData.diffText) {
+        existingCol.diffData.parsed = parseDiff(diffData.diffText);
+        renderDiffContent(diffBody, existingCol);
+      } else {
+        loadWorkingDiff(diffBody, existingCol);
+      }
+      existingCol.element.scrollIntoView({ behavior: 'smooth' });
+      setFocusedColumn(existingDiffId);
+    }
     return;
   }
 
