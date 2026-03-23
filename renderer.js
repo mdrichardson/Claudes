@@ -1690,6 +1690,16 @@ var fileTreeEl = document.getElementById('file-tree');
 var gitChangesEl = document.getElementById('git-changes');
 var gitHeaderEl = document.getElementById('git-header');
 var runConfigsEl = document.getElementById('run-configs');
+var runListView = document.getElementById('run-list-view');
+var runEditorView = document.getElementById('run-editor-view');
+var runProfilesView = document.getElementById('run-profiles-view');
+var runEditorForm = document.getElementById('run-editor-form');
+var runEditorTitle = document.getElementById('run-editor-title');
+var runProfilesList = document.getElementById('run-profiles-list');
+var runProfileEditor = document.getElementById('run-profile-editor');
+var runCachedData = null; // { configs, envProfiles }
+var runEditingConfig = null; // config being edited, or null for new
+var runEditingIndex = -1; // index in custom configs array, or -1 for new
 
 // Tab switching
 document.querySelectorAll('.explorer-tab').forEach(function (tab) {
@@ -2393,37 +2403,572 @@ function showGitStatus(text, isError) {
 function refreshRunConfigs() {
   if (!activeProjectKey || !window.electronAPI) return;
   while (runConfigsEl.firstChild) runConfigsEl.removeChild(runConfigsEl.firstChild);
-  window.electronAPI.getLaunchConfigs(activeProjectKey).then(function (configs) {
+  window.electronAPI.getLaunchConfigs(activeProjectKey).then(function (data) {
+    runCachedData = data;
+    var configs = data.configs || [];
     if (configs.length === 0) {
       var empty = document.createElement('div');
       empty.className = 'run-empty';
-      empty.textContent = 'No launch configurations found';
+      empty.textContent = 'No launch configurations found. Click + to add one.';
       runConfigsEl.appendChild(empty);
       return;
     }
+    // Group by _source
+    var groups = { custom: [], launchSettings: [], 'launch.json': [] };
     for (var i = 0; i < configs.length; i++) {
-      (function (config) {
-        var item = document.createElement('div');
-        item.className = 'run-config-item';
-        var playBtn = document.createElement('button');
-        playBtn.className = 'run-play-btn';
-        playBtn.textContent = '\u25B6';
-        playBtn.title = 'Run ' + config.name;
-        var nameEl = document.createElement('span');
-        nameEl.className = 'run-config-name';
-        nameEl.textContent = config.name;
-        var typeEl = document.createElement('span');
-        typeEl.className = 'run-config-type';
-        typeEl.textContent = config.type || '';
-        playBtn.addEventListener('click', function () {
-          launchConfig(config);
-        });
-        item.appendChild(playBtn);
-        item.appendChild(nameEl);
-        item.appendChild(typeEl);
-        runConfigsEl.appendChild(item);
-      })(configs[i]);
+      var src = configs[i]._source || 'custom';
+      if (!groups[src]) groups[src] = [];
+      groups[src].push(configs[i]);
     }
+    var groupLabels = { custom: 'Custom', launchSettings: 'Launch Settings', 'launch.json': 'VS Code' };
+    var groupOrder = ['custom', 'launchSettings', 'launch.json'];
+    for (var g = 0; g < groupOrder.length; g++) {
+      var key = groupOrder[g];
+      var items = groups[key];
+      if (!items || items.length === 0) continue;
+      var group = document.createElement('div');
+      group.className = 'run-source-group';
+      var hdr = document.createElement('div');
+      hdr.className = 'run-source-header';
+      var arrow = document.createElement('span');
+      arrow.className = 'run-source-arrow expanded';
+      arrow.textContent = '\u25B8';
+      var label = document.createElement('span');
+      label.textContent = (groupLabels[key] || key) + ' (' + items.length + ')';
+      hdr.appendChild(arrow);
+      hdr.appendChild(label);
+      group.appendChild(hdr);
+      var list = document.createElement('div');
+      list.className = 'run-source-items';
+      hdr.addEventListener('click', (function (a, l) {
+        return function () {
+          a.classList.toggle('expanded');
+          l.classList.toggle('collapsed');
+        };
+      })(arrow, list));
+      for (var j = 0; j < items.length; j++) {
+        (function (config) {
+          var item = document.createElement('div');
+          item.className = 'run-config-item';
+          var playBtn = document.createElement('button');
+          playBtn.className = 'run-play-btn';
+          playBtn.textContent = '\u25B6';
+          playBtn.title = 'Run ' + config.name;
+          playBtn.addEventListener('click', function () { launchConfig(config); });
+          var nameEl = document.createElement('span');
+          nameEl.className = 'run-config-name';
+          nameEl.textContent = config.name;
+          var typeEl = document.createElement('span');
+          var knownTypes = ['dotnet-run', 'dotnet-exec', 'coreclr', 'node', 'pwa-node', 'python', 'custom'];
+          var isUnknown = config.type && knownTypes.indexOf(config.type) === -1;
+          typeEl.className = 'run-config-badge' + (isUnknown ? ' warning' : '');
+          typeEl.textContent = config.type || '';
+          var actions = document.createElement('div');
+          actions.className = 'run-config-actions';
+          if (config._readonly) {
+            var cloneBtn = document.createElement('button');
+            cloneBtn.className = 'run-config-action-btn';
+            cloneBtn.textContent = '\u2398'; // clone icon
+            cloneBtn.title = 'Clone to custom configs';
+            cloneBtn.addEventListener('click', function () { cloneConfig(config); });
+            actions.appendChild(cloneBtn);
+          } else {
+            var editBtn = document.createElement('button');
+            editBtn.className = 'run-config-action-btn';
+            editBtn.textContent = '\u270E'; // pencil
+            editBtn.title = 'Edit';
+            editBtn.addEventListener('click', function () { openConfigEditor(config); });
+            actions.appendChild(editBtn);
+          }
+          item.appendChild(playBtn);
+          item.appendChild(nameEl);
+          item.appendChild(typeEl);
+          item.appendChild(actions);
+          list.appendChild(item);
+        })(items[j]);
+      }
+      group.appendChild(list);
+      runConfigsEl.appendChild(group);
+    }
+  });
+}
+
+function cloneConfig(config) {
+  var cloned = JSON.parse(JSON.stringify(config));
+  cloned.name = config.name + ' (Copy)';
+  cloned._source = 'custom';
+  cloned._readonly = false;
+  openConfigEditor(cloned, true);
+}
+
+function showRunListView() {
+  runListView.classList.remove('hidden');
+  runEditorView.classList.add('hidden');
+  runProfilesView.classList.add('hidden');
+}
+
+function showRunEditorView() {
+  runListView.classList.add('hidden');
+  runEditorView.classList.remove('hidden');
+  runProfilesView.classList.add('hidden');
+}
+
+function showRunProfilesView() {
+  runListView.classList.add('hidden');
+  runEditorView.classList.add('hidden');
+  runProfilesView.classList.remove('hidden');
+}
+
+function openConfigEditor(config, isNew) {
+  runEditingConfig = config ? JSON.parse(JSON.stringify(config)) : {
+    name: '',
+    type: 'custom',
+    command: '',
+    args: [],
+    cwd: '',
+    env: {},
+    envProfile: '',
+    envFile: '',
+    applicationUrl: '',
+    openBrowserOnLaunch: false
+  };
+  if (isNew && !config) {
+    runEditingIndex = -1;
+  } else if (isNew && config) {
+    runEditingIndex = -1;
+  } else {
+    runEditingIndex = findCustomConfigIndex(config);
+  }
+  runEditorTitle.textContent = isNew ? 'New Configuration' : 'Edit: ' + config.name;
+  document.getElementById('btn-run-delete').classList.toggle('hidden', runEditingIndex < 0);
+  buildEditorForm();
+  showRunEditorView();
+}
+
+function findCustomConfigIndex(config) {
+  if (!runCachedData) return -1;
+  var customs = (runCachedData.configs || []).filter(function (c) { return c._source === 'custom'; });
+  for (var i = 0; i < customs.length; i++) {
+    if (customs[i].name === config.name && customs[i].type === config.type) return i;
+  }
+  return -1;
+}
+
+function buildEditorForm() {
+  var form = runEditorForm;
+  while (form.firstChild) form.removeChild(form.firstChild);
+  var cfg = runEditingConfig;
+
+  // General section
+  var general = createEditorSection('General', true);
+  general.body.appendChild(createTextField('Name', cfg.name, function (v) { cfg.name = v; }));
+  var typeOpts = [
+    { value: 'dotnet-run', label: 'dotnet run' },
+    { value: 'dotnet-exec', label: 'dotnet (exec)' },
+    { value: 'node', label: 'Node.js' },
+    { value: 'python', label: 'Python' },
+    { value: 'custom', label: 'Custom Command' }
+  ];
+  general.body.appendChild(createSelectField('Type', cfg.type || 'custom', typeOpts, function (v) {
+    cfg.type = v;
+    buildEditorForm();
+  }));
+  form.appendChild(general.el);
+
+  // Command section — type-specific
+  var command = createEditorSection('Command', true);
+  if (cfg.type === 'dotnet-run') {
+    command.body.appendChild(createFileField('Project (.csproj)', cfg.project || '', function (v) { cfg.project = v; },
+      [{ name: 'C# Project', extensions: ['csproj'] }]));
+    command.body.appendChild(createTextField('Application URL', cfg.applicationUrl || '', function (v) { cfg.applicationUrl = v; }));
+    command.body.appendChild(createTextField('Framework (TFM)', cfg.framework || '', function (v) { cfg.framework = v; }));
+  } else if (cfg.type === 'dotnet-exec') {
+    command.body.appendChild(createFileField('Program (.dll)', cfg.program || '', function (v) { cfg.program = v; },
+      [{ name: 'DLL', extensions: ['dll'] }]));
+  } else if (cfg.type === 'node') {
+    command.body.appendChild(createTextField('Program', cfg.program || '', function (v) { cfg.program = v; }));
+    command.body.appendChild(createTextField('Runtime Executable', cfg.runtimeExecutable || '', function (v) { cfg.runtimeExecutable = v; }));
+    command.body.appendChild(createTextField('Runtime Args', (cfg.runtimeArgs || []).join(' '), function (v) { cfg.runtimeArgs = v ? v.split(/\s+/) : []; }));
+  } else if (cfg.type === 'python') {
+    command.body.appendChild(createTextField('Script', cfg.script || cfg.program || '', function (v) { cfg.script = v; }));
+    command.body.appendChild(createTextField('Interpreter Path', cfg.interpreter || '', function (v) { cfg.interpreter = v; }));
+  } else {
+    command.body.appendChild(createTextField('Command', cfg.command || '', function (v) { cfg.command = v; }));
+  }
+  form.appendChild(command.el);
+
+  // Arguments
+  var argsSection = createEditorSection('Arguments', true);
+  var argsVal = Array.isArray(cfg.args) ? cfg.args.join(' ') : (cfg.args || cfg.commandLineArgs || '');
+  argsSection.body.appendChild(createTextField('Command Line Args', argsVal, function (v) {
+    cfg.args = v ? v.split(/\s+/) : [];
+    cfg.commandLineArgs = v;
+  }));
+  form.appendChild(argsSection.el);
+
+  // Working Directory
+  var cwdSection = createEditorSection('Working Directory', true);
+  cwdSection.body.appendChild(createTextField('Path', cfg.cwd || '', function (v) { cfg.cwd = v; }));
+  form.appendChild(cwdSection.el);
+
+  // Environment
+  var envSection = createEditorSection('Environment', true);
+  var profiles = (runCachedData && runCachedData.envProfiles) ? runCachedData.envProfiles : {};
+  var profileNames = Object.keys(profiles);
+  var profileOpts = [{ value: '', label: 'None' }];
+  for (var p = 0; p < profileNames.length; p++) {
+    profileOpts.push({ value: profileNames[p], label: profileNames[p] });
+  }
+  envSection.body.appendChild(createSelectField('Env Profile', cfg.envProfile || '', profileOpts, function (v) { cfg.envProfile = v; }));
+  var manageLink = document.createElement('button');
+  manageLink.className = 'run-editor-link';
+  manageLink.textContent = 'Manage Profiles';
+  manageLink.addEventListener('click', function () { openProfileManager(); });
+  envSection.body.appendChild(manageLink);
+  envSection.body.appendChild(createEnvTable(cfg.env || {}, function (env) { cfg.env = env; }));
+  envSection.body.appendChild(createTextField('Env File Path', cfg.envFile || '', function (v) { cfg.envFile = v; }));
+  form.appendChild(envSection.el);
+
+  // URL section (for web apps)
+  if (cfg.type === 'dotnet-run' || cfg.type === 'node' || cfg.type === 'custom') {
+    var urlSection = createEditorSection('URL', false);
+    if (cfg.type !== 'dotnet-run') {
+      urlSection.body.appendChild(createTextField('Application URL', cfg.applicationUrl || '', function (v) { cfg.applicationUrl = v; }));
+    }
+    var cbRow = document.createElement('div');
+    cbRow.className = 'run-editor-checkbox-row';
+    var cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = cfg.openBrowserOnLaunch || false;
+    cb.addEventListener('change', function () { cfg.openBrowserOnLaunch = cb.checked; });
+    var cbLabel = document.createElement('span');
+    cbLabel.textContent = 'Open browser on launch';
+    cbRow.appendChild(cb);
+    cbRow.appendChild(cbLabel);
+    urlSection.body.appendChild(cbRow);
+    form.appendChild(urlSection.el);
+  }
+}
+
+function createEditorSection(title, startOpen) {
+  var section = document.createElement('div');
+  section.className = 'run-editor-section';
+  var header = document.createElement('div');
+  header.className = 'run-editor-section-header';
+  var arrow = document.createElement('span');
+  arrow.className = 'run-source-arrow' + (startOpen ? ' expanded' : '');
+  arrow.textContent = '\u25B8';
+  header.appendChild(arrow);
+  var lbl = document.createElement('span');
+  lbl.textContent = title;
+  header.appendChild(lbl);
+  section.appendChild(header);
+  var body = document.createElement('div');
+  body.className = 'run-editor-section-body' + (startOpen ? '' : ' collapsed');
+  section.appendChild(body);
+  header.addEventListener('click', function () {
+    arrow.classList.toggle('expanded');
+    body.classList.toggle('collapsed');
+  });
+  return { el: section, body: body };
+}
+
+function createTextField(label, value, onChange) {
+  var field = document.createElement('div');
+  field.className = 'run-editor-field';
+  var lbl = document.createElement('label');
+  lbl.className = 'run-editor-label';
+  lbl.textContent = label;
+  field.appendChild(lbl);
+  var input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'run-editor-input';
+  input.value = value;
+  input.addEventListener('change', function () { onChange(input.value); });
+  input.addEventListener('input', function () { onChange(input.value); });
+  field.appendChild(input);
+  return field;
+}
+
+function createSelectField(label, value, options, onChange) {
+  var field = document.createElement('div');
+  field.className = 'run-editor-field';
+  var lbl = document.createElement('label');
+  lbl.className = 'run-editor-label';
+  lbl.textContent = label;
+  field.appendChild(lbl);
+  var select = document.createElement('select');
+  select.className = 'run-editor-select';
+  for (var i = 0; i < options.length; i++) {
+    var opt = document.createElement('option');
+    opt.value = options[i].value;
+    opt.textContent = options[i].label;
+    if (options[i].value === value) opt.selected = true;
+    select.appendChild(opt);
+  }
+  select.addEventListener('change', function () { onChange(select.value); });
+  field.appendChild(select);
+  return field;
+}
+
+function createFileField(label, value, onChange, filters) {
+  var field = document.createElement('div');
+  field.className = 'run-editor-field';
+  var lbl = document.createElement('label');
+  lbl.className = 'run-editor-label';
+  lbl.textContent = label;
+  field.appendChild(lbl);
+  var row = document.createElement('div');
+  row.className = 'run-editor-input-row';
+  var input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'run-editor-input';
+  input.value = value;
+  input.addEventListener('change', function () { onChange(input.value); });
+  input.addEventListener('input', function () { onChange(input.value); });
+  row.appendChild(input);
+  var btn = document.createElement('button');
+  btn.className = 'run-editor-browse-btn';
+  btn.textContent = 'Browse';
+  btn.addEventListener('click', function () {
+    window.electronAPI.browseFile(filters || []).then(function (path) {
+      if (path) {
+        input.value = path;
+        onChange(path);
+      }
+    });
+  });
+  row.appendChild(btn);
+  field.appendChild(row);
+  return field;
+}
+
+function createEnvTable(env, onChange) {
+  var wrapper = document.createElement('div');
+  var entries = Object.entries(env);
+  function rebuild() {
+    while (wrapper.firstChild) wrapper.removeChild(wrapper.firstChild);
+    var table = document.createElement('table');
+    table.className = 'run-env-table';
+    if (entries.length > 0) {
+      var thead = document.createElement('thead');
+      var tr = document.createElement('tr');
+      var th1 = document.createElement('th'); th1.textContent = 'Variable';
+      var th2 = document.createElement('th'); th2.textContent = 'Value';
+      var th3 = document.createElement('th'); th3.textContent = '';
+      tr.appendChild(th1); tr.appendChild(th2); tr.appendChild(th3);
+      thead.appendChild(tr);
+      table.appendChild(thead);
+    }
+    var tbody = document.createElement('tbody');
+    for (var i = 0; i < entries.length; i++) {
+      (function (idx) {
+        var row = document.createElement('tr');
+        var td1 = document.createElement('td');
+        var keyInput = document.createElement('input');
+        keyInput.value = entries[idx][0];
+        keyInput.placeholder = 'KEY';
+        keyInput.addEventListener('change', function () {
+          entries[idx][0] = keyInput.value;
+          syncEnv();
+        });
+        td1.appendChild(keyInput);
+        var td2 = document.createElement('td');
+        var valInput = document.createElement('input');
+        valInput.value = entries[idx][1];
+        valInput.placeholder = 'value';
+        valInput.addEventListener('change', function () {
+          entries[idx][1] = valInput.value;
+          syncEnv();
+        });
+        td2.appendChild(valInput);
+        var td3 = document.createElement('td');
+        var rmBtn = document.createElement('button');
+        rmBtn.className = 'run-env-remove-btn';
+        rmBtn.textContent = '\u00D7';
+        rmBtn.addEventListener('click', function () {
+          entries.splice(idx, 1);
+          rebuild();
+          syncEnv();
+        });
+        td3.appendChild(rmBtn);
+        row.appendChild(td1); row.appendChild(td2); row.appendChild(td3);
+        tbody.appendChild(row);
+      })(i);
+    }
+    table.appendChild(tbody);
+    wrapper.appendChild(table);
+    var addBtn = document.createElement('button');
+    addBtn.className = 'run-env-add-btn';
+    addBtn.textContent = '+ Add Variable';
+    addBtn.addEventListener('click', function () {
+      entries.push(['', '']);
+      rebuild();
+    });
+    wrapper.appendChild(addBtn);
+  }
+  function syncEnv() {
+    var obj = {};
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i][0]) obj[entries[i][0]] = entries[i][1];
+    }
+    onChange(obj);
+  }
+  rebuild();
+  return wrapper;
+}
+
+var activeProfileName = null;
+
+function openProfileManager() {
+  showRunProfilesView();
+  renderProfileList();
+}
+
+function renderProfileList() {
+  var list = runProfilesList;
+  while (list.firstChild) list.removeChild(list.firstChild);
+  var profiles = (runCachedData && runCachedData.envProfiles) ? runCachedData.envProfiles : {};
+  var names = Object.keys(profiles);
+
+  for (var i = 0; i < names.length; i++) {
+    (function (name) {
+      var item = document.createElement('div');
+      item.className = 'run-profile-item' + (name === activeProfileName ? ' active' : '');
+      var nameEl = document.createElement('span');
+      nameEl.textContent = name;
+      nameEl.style.flex = '1';
+      item.appendChild(nameEl);
+      var delBtn = document.createElement('button');
+      delBtn.className = 'run-config-action-btn';
+      delBtn.textContent = '\u00D7';
+      delBtn.title = 'Delete profile';
+      delBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (!confirm('Delete profile "' + name + '"?')) return;
+        delete profiles[name];
+        saveProfiles(profiles);
+        if (activeProfileName === name) activeProfileName = null;
+        renderProfileList();
+        renderProfileEditor();
+      });
+      item.appendChild(delBtn);
+      item.addEventListener('click', function () {
+        activeProfileName = name;
+        renderProfileList();
+        renderProfileEditor();
+      });
+      list.appendChild(item);
+    })(names[i]);
+  }
+
+  var actions = document.createElement('div');
+  actions.className = 'run-profile-actions';
+  var addBtn = document.createElement('button');
+  addBtn.className = 'run-profile-add-btn';
+  addBtn.textContent = '+ Add Profile';
+  addBtn.addEventListener('click', function () {
+    var name = prompt('Profile name:');
+    if (!name) return;
+    profiles[name] = {};
+    saveProfiles(profiles);
+    activeProfileName = name;
+    renderProfileList();
+    renderProfileEditor();
+  });
+  actions.appendChild(addBtn);
+  list.appendChild(actions);
+
+  if (!activeProfileName && names.length > 0) {
+    activeProfileName = names[0];
+  }
+  renderProfileEditor();
+}
+
+function renderProfileEditor() {
+  var editor = runProfileEditor;
+  while (editor.firstChild) editor.removeChild(editor.firstChild);
+  if (!activeProfileName) {
+    var empty = document.createElement('div');
+    empty.className = 'run-empty';
+    empty.textContent = 'Select a profile to edit';
+    editor.appendChild(empty);
+    return;
+  }
+  var profiles = (runCachedData && runCachedData.envProfiles) ? runCachedData.envProfiles : {};
+  var profileEnv = profiles[activeProfileName] || {};
+
+  var renameField = createTextField('Profile Name', activeProfileName, function (v) {
+    if (v && v !== activeProfileName && !profiles[v]) {
+      profiles[v] = profiles[activeProfileName];
+      delete profiles[activeProfileName];
+      activeProfileName = v;
+      saveProfiles(profiles);
+      renderProfileList();
+    }
+  });
+  editor.appendChild(renameField);
+
+  var envFileVal = profileEnv._envFile || '';
+  editor.appendChild(createTextField('Env File', envFileVal, function (v) {
+    if (v) {
+      profileEnv._envFile = v;
+    } else {
+      delete profileEnv._envFile;
+    }
+    profiles[activeProfileName] = profileEnv;
+    saveProfiles(profiles);
+  }));
+
+  var envOnly = {};
+  for (var k in profileEnv) {
+    if (k !== '_envFile') envOnly[k] = profileEnv[k];
+  }
+  editor.appendChild(createEnvTable(envOnly, function (env) {
+    var updated = {};
+    if (profileEnv._envFile) updated._envFile = profileEnv._envFile;
+    for (var key in env) updated[key] = env[key];
+    profiles[activeProfileName] = updated;
+    saveProfiles(profiles);
+  }));
+}
+
+function saveProfiles(profiles) {
+  if (!activeProjectKey) return;
+  runCachedData.envProfiles = profiles;
+  window.electronAPI.saveEnvProfiles(activeProjectKey, profiles);
+}
+
+function resolveConfigEnv(config) {
+  var mergedEnv = {};
+  var profile = null;
+  if (runCachedData && config.envProfile && runCachedData.envProfiles) {
+    profile = runCachedData.envProfiles[config.envProfile];
+  }
+
+  var p1 = (profile && profile._envFile)
+    ? window.electronAPI.readEnvFile(profile._envFile)
+    : Promise.resolve({});
+
+  var p2 = config.envFile
+    ? window.electronAPI.readEnvFile(config.envFile)
+    : Promise.resolve({});
+
+  return Promise.all([p1, p2]).then(function (results) {
+    var profileFileEnv = results[0];
+    var configFileEnv = results[1];
+
+    for (var k in profileFileEnv) mergedEnv[k] = profileFileEnv[k];
+    if (profile) {
+      for (var k2 in profile) {
+        if (k2 !== '_envFile') mergedEnv[k2] = profile[k2];
+      }
+    }
+    for (var k3 in configFileEnv) mergedEnv[k3] = configFileEnv[k3];
+    var configEnv = config.env || {};
+    for (var k4 in configEnv) mergedEnv[k4] = configEnv[k4];
+
+    return mergedEnv;
   });
 }
 
@@ -2433,43 +2978,96 @@ function launchConfig(config) {
     if (!str) return str;
     return str.replace(/\$\{workspaceFolder\}/g, activeProjectKey);
   }
-  var cmd, cmdArgs, cwd, env;
-  cwd = config.cwd ? resolve(config.cwd) : activeProjectKey;
-  env = config.env || null;
-  if (config.type === 'dotnet-project') {
-    cmd = 'dotnet';
-    cmdArgs = ['run'];
-    if (config.applicationUrl) {
-      cmdArgs.push('--urls');
-      cmdArgs.push(config.applicationUrl);
-    }
-    if (config.commandLineArgs) {
-      cmdArgs.push('--');
-      cmdArgs = cmdArgs.concat(config.commandLineArgs.split(/\s+/));
-    }
-  } else if (config.type === 'coreclr') {
-    cmd = 'dotnet';
-    cmdArgs = [];
-    if (config.program) cmdArgs.push(resolve(config.program));
-    if (config.args) cmdArgs = cmdArgs.concat(config.args.map(resolve));
-  } else if (config.type === 'node' || config.type === 'pwa-node') {
-    cmd = config.runtimeExecutable || 'node';
-    cmdArgs = [];
-    if (config.runtimeArgs) cmdArgs = cmdArgs.concat(config.runtimeArgs.map(resolve));
-    if (config.program) cmdArgs.push(resolve(config.program));
-    if (config.args) cmdArgs = cmdArgs.concat(config.args.map(resolve));
-  } else if (config.runtimeExecutable) {
-    cmd = resolve(config.runtimeExecutable);
-    cmdArgs = (config.args || []).map(resolve);
-    if (config.program) cmdArgs.unshift(resolve(config.program));
-  } else if (config.program) {
-    cmd = resolve(config.program);
-    cmdArgs = (config.args || []).map(resolve);
-  } else {
-    return;
+
+  var existing = findRunningColumn(config.name);
+  if (existing) {
+    if (!confirm('"' + config.name + '" is already running. Kill and restart?')) return;
+    removeColumn(existing);
   }
-  var launchUrl = config.applicationUrl || null;
-  addColumn(cmdArgs, null, { cmd: cmd, title: config.name, cwd: cwd, env: env, launchUrl: launchUrl });
+
+  resolveConfigEnv(config).then(function (mergedEnv) {
+    var cmd, cmdArgs, cwd, env;
+    cwd = config.cwd ? resolve(config.cwd) : activeProjectKey;
+    env = Object.keys(mergedEnv).length > 0 ? mergedEnv : null;
+
+    if (config.type === 'dotnet-run') {
+      cmd = 'dotnet';
+      cmdArgs = ['run'];
+      if (config.project) {
+        cmdArgs.push('--project');
+        cmdArgs.push(resolve(config.project));
+      }
+      if (config.framework) {
+        cmdArgs.push('--framework');
+        cmdArgs.push(config.framework);
+      }
+      if (config.applicationUrl) {
+        cmdArgs.push('--urls');
+        cmdArgs.push(config.applicationUrl);
+      }
+      var args = config.args || config.commandLineArgs;
+      if (args) {
+        cmdArgs.push('--');
+        if (Array.isArray(args)) {
+          cmdArgs = cmdArgs.concat(args);
+        } else {
+          cmdArgs = cmdArgs.concat(args.split(/\s+/));
+        }
+      }
+    } else if (config.type === 'dotnet-exec' || config.type === 'coreclr') {
+      cmd = 'dotnet';
+      cmdArgs = [];
+      if (config.program) cmdArgs.push(resolve(config.program));
+      if (config.args) {
+        cmdArgs = cmdArgs.concat(Array.isArray(config.args) ? config.args.map(resolve) : config.args.split(/\s+/));
+      }
+    } else if (config.type === 'node' || config.type === 'pwa-node') {
+      cmd = config.runtimeExecutable || 'node';
+      cmdArgs = [];
+      if (config.runtimeArgs) cmdArgs = cmdArgs.concat(Array.isArray(config.runtimeArgs) ? config.runtimeArgs : config.runtimeArgs.split(/\s+/));
+      if (config.program) cmdArgs.push(resolve(config.program));
+      if (config.args) cmdArgs = cmdArgs.concat(Array.isArray(config.args) ? config.args.map(resolve) : config.args.split(/\s+/));
+    } else if (config.type === 'python') {
+      var script = config.script || config.program || '';
+      cmd = config.interpreter || 'python';
+      cmdArgs = [];
+      if (script) cmdArgs.push(resolve(script));
+      if (config.args) cmdArgs = cmdArgs.concat(Array.isArray(config.args) ? config.args : config.args.split(/\s+/));
+    } else if (config.type === 'custom') {
+      cmd = resolve(config.command);
+      cmdArgs = [];
+      if (config.args) {
+        cmdArgs = Array.isArray(config.args) ? config.args.map(resolve) : config.args.split(/\s+/).map(resolve);
+      }
+    } else if (config.runtimeExecutable) {
+      cmd = resolve(config.runtimeExecutable);
+      cmdArgs = (config.args || []).map(resolve);
+      if (config.program) cmdArgs.unshift(resolve(config.program));
+    } else if (config.program) {
+      cmd = resolve(config.program);
+      cmdArgs = (config.args || []).map(resolve);
+    } else if (config.command) {
+      cmd = resolve(config.command);
+      cmdArgs = Array.isArray(config.args) ? config.args : [];
+    } else {
+      return;
+    }
+
+    var launchUrl = config.applicationUrl || null;
+    addColumn(cmdArgs, null, { cmd: cmd, title: config.name, cwd: cwd, env: env, launchUrl: launchUrl });
+  });
+}
+
+function findRunningColumn(configName) {
+  var state = getActiveState();
+  if (!state) return null;
+  var found = null;
+  state.columns.forEach(function (colData, id) {
+    if (colData.customTitle === configName && colData.cmd) {
+      found = id;
+    }
+  });
+  return found;
 }
 
 function refreshExplorer() {
@@ -2485,6 +3083,67 @@ btnToggleExplorer.addEventListener('click', toggleExplorer);
 document.getElementById('btn-refresh-files').addEventListener('click', refreshFileTree);
 document.getElementById('btn-refresh-git').addEventListener('click', function () { refreshGitStatus(true); });
 document.getElementById('btn-refresh-run').addEventListener('click', refreshRunConfigs);
+document.getElementById('btn-add-run-config').addEventListener('click', function () {
+  openConfigEditor(null, true);
+});
+document.getElementById('btn-run-editor-back').addEventListener('click', function () {
+  showRunListView();
+});
+document.getElementById('btn-run-cancel').addEventListener('click', function () {
+  showRunListView();
+  refreshRunConfigs();
+});
+document.getElementById('btn-profiles-back').addEventListener('click', function () {
+  showRunEditorView();
+});
+document.getElementById('btn-run-save').addEventListener('click', function () {
+  if (!activeProjectKey || !runEditingConfig) return;
+  var cfg = runEditingConfig;
+  if (!cfg.name) { alert('Name is required'); return; }
+  if (cfg.type === 'dotnet-run' && !cfg.project) { alert('Project (.csproj) is required for dotnet-run'); return; }
+  if (cfg.type === 'custom' && !cfg.command) { alert('Command is required for custom type'); return; }
+
+  var toSave = JSON.parse(JSON.stringify(cfg));
+  delete toSave._source;
+  delete toSave._readonly;
+
+  window.electronAPI.getLaunchConfigs(activeProjectKey).then(function (data) {
+    var customs = (data.configs || []).filter(function (c) { return c._source === 'custom'; });
+    customs = customs.map(function (c) {
+      var copy = JSON.parse(JSON.stringify(c));
+      delete copy._source;
+      delete copy._readonly;
+      return copy;
+    });
+    if (runEditingIndex >= 0 && runEditingIndex < customs.length) {
+      customs[runEditingIndex] = toSave;
+    } else {
+      customs.push(toSave);
+    }
+    return window.electronAPI.saveLaunchConfigs(activeProjectKey, customs);
+  }).then(function () {
+    showRunListView();
+    refreshRunConfigs();
+  });
+});
+document.getElementById('btn-run-delete').addEventListener('click', function () {
+  if (!activeProjectKey || runEditingIndex < 0) return;
+  if (!confirm('Delete this configuration?')) return;
+  window.electronAPI.getLaunchConfigs(activeProjectKey).then(function (data) {
+    var customs = (data.configs || []).filter(function (c) { return c._source === 'custom'; });
+    customs = customs.map(function (c) {
+      var copy = JSON.parse(JSON.stringify(c));
+      delete copy._source;
+      delete copy._readonly;
+      return copy;
+    });
+    customs.splice(runEditingIndex, 1);
+    return window.electronAPI.saveLaunchConfigs(activeProjectKey, customs);
+  }).then(function () {
+    showRunListView();
+    refreshRunConfigs();
+  });
+});
 document.getElementById('btn-git-commit').addEventListener('click', gitCommit);
 gitCommitMsg.addEventListener('keydown', function (e) {
   if (e.ctrlKey && e.key === 'Enter') {
