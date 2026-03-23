@@ -461,12 +461,20 @@ ipcMain.handle('git:diff', (event, projectPath, filePath, staged) => {
   }
 });
 
-ipcMain.handle('git:log', (event, projectPath, count) => {
+ipcMain.handle('git:graphLog', (event, projectPath, count) => {
   try {
-    const output = execFileSync('git', ['log', '--oneline', '-' + (count || 10), '--no-color'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 });
+    const output = execFileSync('git', ['log', '--format=%H|%h|%P|%s|%an|%ar|%D', '-' + (count || 50), '--no-color'], { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
     return output.trim().split('\n').filter(Boolean).map(line => {
-      const spaceIdx = line.indexOf(' ');
-      return { hash: line.substring(0, spaceIdx), message: line.substring(spaceIdx + 1) };
+      const parts = line.split('|');
+      return {
+        hash: parts[0],
+        abbrev: parts[1],
+        parents: parts[2] ? parts[2].split(' ').filter(Boolean) : [],
+        message: parts[3],
+        author: parts[4],
+        relativeDate: parts[5],
+        refs: parts[6] ? parts[6].split(',').map(r => r.trim()).filter(Boolean) : []
+      };
     });
   } catch {
     return [];
@@ -501,6 +509,64 @@ ipcMain.handle('git:stashPop', (event, projectPath) => {
     return { success: true };
   } catch (err) {
     return { success: false, error: (err.stderr || err.message).toString().trim() };
+  }
+});
+
+ipcMain.handle('git:commitDetail', (event, projectPath, hash) => {
+  try {
+    const output = execFileSync('git', ['show', '--stat', '--format=%H|%s|%an|%aI', hash, '--no-color'], { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
+    const lines = output.trim().split('\n');
+    const meta = lines[0].split('|');
+    const files = [];
+    for (let i = 1; i < lines.length; i++) {
+      const statMatch = lines[i].match(/^\s*(.+?)\s+\|\s+(\d+)\s+(\+*)(-*)/);
+      if (statMatch) {
+        files.push({
+          file: statMatch[1].trim(),
+          insertions: (statMatch[3] || '').length,
+          deletions: (statMatch[4] || '').length,
+          total: parseInt(statMatch[2])
+        });
+      }
+    }
+    return { hash: meta[0], message: meta[1], author: meta[2], date: meta[3], files: files };
+  } catch (err) {
+    return { hash: hash, message: '', author: '', date: '', files: [], error: (err.stderr || err.message).toString().trim() };
+  }
+});
+
+ipcMain.handle('git:diffCommit', (event, projectPath, hash, filePath) => {
+  try {
+    const args = filePath
+      ? ['diff', hash + '~1..' + hash, '--', filePath]
+      : ['diff', hash + '~1..' + hash];
+    return execFileSync('git', args, { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
+  } catch {
+    try {
+      const args2 = filePath
+        ? ['show', hash, '--', filePath]
+        : ['show', '--format=', hash];
+      return execFileSync('git', args2, { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
+    } catch {
+      return '';
+    }
+  }
+});
+
+ipcMain.handle('git:diffStat', (event, projectPath, staged) => {
+  try {
+    const args = staged ? ['diff', '--numstat', '--cached'] : ['diff', '--numstat'];
+    const output = execFileSync('git', args, { cwd: projectPath, encoding: 'utf8', timeout: 5000 });
+    return output.trim().split('\n').filter(Boolean).map(line => {
+      const parts = line.split('\t');
+      return {
+        insertions: parts[0] === '-' ? 0 : parseInt(parts[0]) || 0,
+        deletions: parts[1] === '-' ? 0 : parseInt(parts[1]) || 0,
+        file: parts[2]
+      };
+    });
+  } catch {
+    return [];
   }
 });
 
