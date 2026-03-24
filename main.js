@@ -1039,7 +1039,7 @@ ipcMain.handle('loops:update', (event, loopId, updates) => {
   const data = readLoops();
   const loop = data.loops.find(l => l.id === loopId);
   if (!loop) return null;
-  const safeFields = ['name', 'prompt', 'schedule', 'budgetPerRun', 'maxTurns', 'enabled'];
+  const safeFields = ['name', 'prompt', 'schedule', 'enabled', 'skipPermissions'];
   safeFields.forEach(field => {
     if (updates[field] !== undefined) loop[field] = updates[field];
   });
@@ -1082,9 +1082,35 @@ ipcMain.handle('loops:getHistory', (event, loopId, count) => {
   return getLoopHistory(loopId, count);
 });
 
+ipcMain.handle('loops:getRunDetail', (event, loopId, startedAt) => {
+  const dir = path.join(LOOPS_RUNS_DIR, loopId);
+  try {
+    const filename = new Date(startedAt).toISOString().replace(/[:.]/g, '-') + '.json';
+    const filePath = path.join(dir, filename);
+    if (fs.existsSync(filePath)) {
+      return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    }
+    // Fallback: search by startedAt field
+    const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+    for (const f of files) {
+      const data = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+      if (data.startedAt === startedAt) return data;
+    }
+  } catch { /* ignore */ }
+  return null;
+});
+
+ipcMain.handle('loops:getLiveOutput', (event, loopId) => {
+  // Return accumulated output for a currently running loop
+  const liveChunks = liveOutputBuffers.get(loopId);
+  if (liveChunks) return liveChunks.join('');
+  return null;
+});
+
 // --- Loop Scheduler & Execution ---
 
 const runningLoops = new Map(); // loopId -> child process
+const liveOutputBuffers = new Map(); // loopId -> string[] chunks
 const loopQueue = []; // loopIds waiting for a slot
 
 const LOOP_PROMPT_SUFFIX = '\n\nEnd your response with a JSON block wrapped in :::loop-result markers like this:\n:::loop-result\n{"summary": "Brief one-line summary", "attentionItems": [{"summary": "Short description", "detail": "Full context"}]}\n:::loop-result\nIf there are no issues, use an empty attentionItems array.';
@@ -1190,33 +1216,71 @@ function runLoop(loopId) {
 
   const startedAt = new Date().toISOString();
   const outputChunks = [];
+  const textChunks = []; // Human-readable text for display
   const fullPrompt = loop.prompt + LOOP_PROMPT_SUFFIX;
 
-  const args = ['--print', fullPrompt];
-  if (loop.budgetPerRun) args.push('--max-budget-usd', String(loop.budgetPerRun));
+  const args = ['--print', fullPrompt, '--output-format', 'stream-json', '--verbose'];
+  if (loop.skipPermissions) args.push('--dangerously-skip-permissions');
 
   const child = spawn(getClaudePath(), args, {
     cwd: loop.projectPath,
-    stdio: ['pipe', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe'],
     env: Object.assign({}, process.env)
   });
 
   runningLoops.set(loopId, child);
+  liveOutputBuffers.set(loopId, textChunks);
 
+  let streamBuffer = '';
   child.stdout.on('data', (chunk) => {
-    outputChunks.push(chunk.toString());
+    const raw = chunk.toString();
+    outputChunks.push(raw);
+    // Parse streaming JSON events (newline-delimited JSON)
+    streamBuffer += raw;
+    const lines = streamBuffer.split('\n');
+    streamBuffer = lines.pop(); // keep incomplete line in buffer
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const evt = JSON.parse(line);
+        let text = '';
+        if (evt.type === 'assistant' && evt.message && evt.message.content) {
+          evt.message.content.forEach(block => {
+            if (block.type === 'text') text += block.text;
+          });
+        } else if (evt.type === 'content_block_delta' && evt.delta) {
+          if (evt.delta.type === 'text_delta') text = evt.delta.text;
+        } else if (evt.type === 'result' && evt.result) {
+          // Final result — extract text from content blocks
+          if (typeof evt.result === 'string') {
+            text = evt.result;
+          } else if (Array.isArray(evt.result)) {
+            evt.result.forEach(block => {
+              if (block.type === 'text') text += block.text;
+            });
+          }
+        }
+        if (text) {
+          textChunks.push(text);
+          if (mainWindow) mainWindow.webContents.send('loops:output', { loopId, chunk: text });
+        }
+      } catch { /* skip non-JSON lines */ }
+    }
   });
 
   child.stderr.on('data', (chunk) => {
-    outputChunks.push(chunk.toString());
+    const text = chunk.toString();
+    textChunks.push(text);
+    if (mainWindow) mainWindow.webContents.send('loops:output', { loopId, chunk: text });
   });
 
   child.on('close', (exitCode) => {
     runningLoops.delete(loopId);
+    liveOutputBuffers.delete(loopId);
 
     const completedAt = new Date().toISOString();
-    const output = outputChunks.join('');
-    const parsed = parseLoopResult(output);
+    const displayOutput = textChunks.join('');
+    const parsed = parseLoopResult(displayOutput);
 
     const runData = {
       loopId: loopId,
@@ -1226,7 +1290,7 @@ function runLoop(loopId) {
       exitCode: exitCode,
       status: exitCode === 0 ? 'completed' : 'error',
       summary: parsed.summary,
-      output: output,
+      output: displayOutput,
       attentionItems: parsed.attentionItems,
       costUsd: null
     };
@@ -1241,6 +1305,8 @@ function runLoop(loopId) {
       freshLoop.lastRunAt = completedAt;
       freshLoop.lastRunStatus = runData.status;
       freshLoop.lastError = exitCode === 0 ? null : 'Exit code: ' + exitCode;
+      freshLoop.lastSummary = parsed.summary || null;
+      freshLoop.lastAttentionItems = parsed.attentionItems || [];
       writeLoops(freshData);
     }
 

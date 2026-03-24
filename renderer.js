@@ -136,7 +136,6 @@ function connectWS() {
       var col = allColumns.get(msg.id);
       if (col) {
         col.terminal.write(msg.data);
-        checkLoopConfig(msg.id, msg.data);
           if (!resizeSuppressed.has(msg.id) && msg.data && col.hasUserInput) {
           // Detect Claude's input prompt: line starting with > or ❯ followed by cursor/space at end of chunk
           var trimmed = msg.data.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').trimEnd();
@@ -631,6 +630,8 @@ function setActiveProject(index, isStartup) {
   var state = getOrCreateProjectState(newKey);
   state.containerEl.style.display = 'flex';
   refreshExplorer();
+  if (activeLoopDetailId) closeLoopDetail();
+  refreshLoops();
 
   if (state.columns.size === 0) {
     if (isStartup && window.electronAPI) {
@@ -1098,8 +1099,7 @@ function addColumn(args, targetRow, opts) {
     launchUrlOpened: false,
     createdAt: Date.now(),
     hasUserInput: false,
-    notified: false,
-    isLoopSetup: opts.isLoopSetup || false
+    notified: false
   };
 
   row.columnIds.push(id);
@@ -5206,6 +5206,7 @@ function refreshLoops() {
     loopsForProject = loops;
     renderLoopCards(loops, listEl);
   });
+  updateLoopsTabIndicator();
 }
 
 function renderLoopCards(loops, container) {
@@ -5278,33 +5279,69 @@ function renderLoopCards(loops, container) {
       }
     }
 
+    var isRunning = !!loop.currentRunStartedAt;
+    var toggleIcon = loop.enabled ? '&#10074;&#10074;' : '&#9654;';
+    var toggleTitle = loop.enabled ? 'Pause' : 'Enable';
+
+    var actionsHtml = '<span class="loop-card-actions">' +
+      '<button class="loop-btn-toggle" title="' + toggleTitle + '">' + toggleIcon + '</button>';
+
+    if (!isRunning) {
+      actionsHtml += '<button class="loop-btn-run" title="Run Now">&#9655;</button>';
+    }
+
+    actionsHtml += '<button class="loop-btn-edit" title="Edit">&#9998;</button>' +
+      '<button class="loop-btn-delete" title="Delete">&times;</button>' +
+      '</span>';
+
+    var summaryHtml = '';
+    if (isRunning) {
+      summaryHtml = '<div class="loop-card-summary loop-card-summary-running">Running...</div>';
+    } else if (loop.lastSummary) {
+      summaryHtml = '<div class="loop-card-summary">' + escapeHtml(loop.lastSummary) + '</div>';
+    }
+
+    var attentionHtml = '';
+    if (loop.lastAttentionItems && loop.lastAttentionItems.length > 0) {
+      attentionHtml = '<div class="loop-card-attention-summary">';
+      loop.lastAttentionItems.forEach(function (item) {
+        attentionHtml += '<div class="loop-card-attention-item">&#9888; ' + escapeHtml(item.summary) + '</div>';
+      });
+      attentionHtml += '</div>';
+    }
+
     var html = '<div class="loop-card-header">' +
       '<span class="loop-card-name">' + escapeHtml(loop.name) + '</span>' +
       '<span class="loop-card-schedule">' + schedText + '</span>' +
       '</div>' +
-      '<div class="loop-card-status">' + lastRunText + (loop.lastError ? ' — ' + escapeHtml(loop.lastError) : '') + '</div>' +
+      '<div class="loop-card-status">' + lastRunText + '</div>' +
+      summaryHtml +
+      attentionHtml +
       '<div class="loop-card-footer">' +
         '<span class="loop-status-badge ' + badgeClass + '">' + badgeText + '</span>' +
         (nextRunText ? '<span class="loop-card-next">' + nextRunText + '</span>' : '') +
-        '<span class="loop-card-actions">' +
-          '<button class="loop-btn-toggle" title="' + (loop.enabled ? 'Pause' : 'Resume') + '">' + (loop.enabled ? '&#10074;&#10074;' : '&#9654;') + '</button>' +
-          '<button class="loop-btn-run" title="Run Now">&#9654;</button>' +
-          '<button class="loop-btn-edit" title="Edit">&#9998;</button>' +
-          '<button class="loop-btn-delete" title="Delete">&times;</button>' +
-        '</span>' +
+        actionsHtml +
       '</div>';
 
     card.innerHTML = html;
+    card.style.cursor = 'pointer';
+
+    card.addEventListener('click', function () {
+      openLoopDetail(loop);
+    });
 
     card.querySelector('.loop-btn-toggle').addEventListener('click', function (e) {
       e.stopPropagation();
       window.electronAPI.toggleLoop(loop.id).then(function () { refreshLoops(); });
     });
-    card.querySelector('.loop-btn-run').addEventListener('click', function (e) {
-      e.stopPropagation();
-      window.electronAPI.runLoopNow(loop.id);
-      refreshLoops();
-    });
+    var runBtn = card.querySelector('.loop-btn-run');
+    if (runBtn) {
+      runBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        window.electronAPI.runLoopNow(loop.id);
+        refreshLoops();
+      });
+    }
     card.querySelector('.loop-btn-edit').addEventListener('click', function (e) {
       e.stopPropagation();
       openLoopModal(loop);
@@ -5321,6 +5358,181 @@ function renderLoopCards(loops, container) {
 }
 
 // ============================================================
+// Loop Detail Panel
+// ============================================================
+
+var activeLoopDetailId = null;
+var loopDetailViewingLive = false;
+
+function openLoopDetail(loop) {
+  activeLoopDetailId = loop.id;
+  var listEl = document.getElementById('loops-list');
+  var detailEl = document.getElementById('loop-detail-panel');
+  var headerEl = document.querySelector('#tab-loops .explorer-section-header');
+
+  listEl.style.display = 'none';
+  if (headerEl) headerEl.style.display = 'none';
+  detailEl.style.display = 'flex';
+
+  document.getElementById('loop-detail-name').textContent = loop.name;
+
+  var isRunning = !!loop.currentRunStartedAt;
+  var badge = document.getElementById('loop-detail-status-badge');
+  if (isRunning) {
+    badge.className = 'loop-status-badge badge-running';
+    badge.textContent = 'running...';
+  } else if (!loop.enabled) {
+    badge.className = 'loop-status-badge badge-disabled';
+    badge.textContent = 'disabled';
+  } else if (loop.lastRunStatus === 'error') {
+    badge.className = 'loop-status-badge badge-error';
+    badge.textContent = 'error';
+  } else {
+    badge.className = 'loop-status-badge badge-idle';
+    badge.textContent = 'idle';
+  }
+
+  // Meta info
+  var schedText = '';
+  if (loop.schedule.type === 'interval') {
+    var mins = loop.schedule.minutes;
+    schedText = mins >= 60 ? 'Every ' + (mins / 60) + 'h' : 'Every ' + mins + 'm';
+  } else {
+    schedText = 'Daily ' + (loop.schedule.hour < 10 ? '0' : '') + loop.schedule.hour + ':' +
+      (loop.schedule.minute < 10 ? '0' : '') + (loop.schedule.minute || 0);
+  }
+  var metaEl = document.getElementById('loop-detail-meta');
+  metaEl.innerHTML = '<span>' + schedText + '</span>' +
+    (loop.lastRunAt ? '<span>Last: ' + new Date(loop.lastRunAt).toLocaleTimeString() + '</span>' : '<span>Never run</span>') +
+    '<span>' + escapeHtml(loop.prompt.substring(0, 80)) + (loop.prompt.length > 80 ? '...' : '') + '</span>';
+
+  var outputEl = document.getElementById('loop-detail-output');
+  var selectEl = document.getElementById('loop-detail-run-select');
+
+  // Build the dropdown: live option (if running) + past runs
+  selectEl.innerHTML = '';
+  if (isRunning) {
+    var liveOpt = document.createElement('option');
+    liveOpt.value = 'live';
+    liveOpt.textContent = 'Live (running)';
+    selectEl.appendChild(liveOpt);
+  }
+
+  // Always load past runs into dropdown
+  window.electronAPI.getLoopHistory(loop.id, 10).then(function (runs) {
+    runs.forEach(function (run, i) {
+      var opt = document.createElement('option');
+      opt.value = run.startedAt;
+      var t = new Date(run.startedAt);
+      opt.textContent = (i === 0 && !isRunning ? 'Latest — ' : '') + t.toLocaleString() + ' (' + run.status + ')';
+      selectEl.appendChild(opt);
+    });
+
+    if (!isRunning && runs.length === 0) {
+      selectEl.innerHTML = '<option>No runs yet</option>';
+      outputEl.textContent = 'This loop has not run yet.';
+      showRunSummary(null);
+      return;
+    }
+
+    // Show the right content based on state
+    if (isRunning) {
+      switchToLiveView(loop);
+    } else if (runs.length > 0) {
+      switchToRunView(loop.id, runs[0].startedAt);
+    }
+  });
+}
+
+function switchToLiveView(loop) {
+  loopDetailViewingLive = true;
+  var outputEl = document.getElementById('loop-detail-output');
+  showRunSummary(null); // hide summary while live
+
+  outputEl.innerHTML = '<span class="loop-processing-indicator">Processing...</span>';
+  window.electronAPI.getLoopLiveOutput(loop.id).then(function (output) {
+    // Only update if still viewing live
+    if (!loopDetailViewingLive || activeLoopDetailId !== loop.id) return;
+    if (output) {
+      outputEl.textContent = output;
+      outputEl.scrollTop = outputEl.scrollHeight;
+    }
+    // else keep showing "Processing..." indicator
+  });
+}
+
+function switchToRunView(loopId, startedAt) {
+  loopDetailViewingLive = false;
+  var outputEl = document.getElementById('loop-detail-output');
+  outputEl.textContent = 'Loading...';
+  window.electronAPI.getLoopRunDetail(loopId, startedAt).then(function (run) {
+    if (!run) {
+      outputEl.textContent = 'Run data not found.';
+      showRunSummary(null);
+      return;
+    }
+    showRunSummary(run);
+    outputEl.textContent = run.output || '(no output)';
+    outputEl.scrollTop = 0;
+  });
+}
+
+function showRunSummary(run) {
+  var summaryEl = document.getElementById('loop-detail-summary');
+  var attentionEl = document.getElementById('loop-detail-attention');
+
+  if (run && run.summary) {
+    summaryEl.textContent = run.summary;
+    summaryEl.style.display = '';
+  } else {
+    summaryEl.style.display = 'none';
+  }
+
+  if (run && run.attentionItems && run.attentionItems.length > 0) {
+    attentionEl.innerHTML = '';
+    run.attentionItems.forEach(function (item) {
+      var itemEl = document.createElement('div');
+      itemEl.className = 'loop-detail-attention-item';
+      itemEl.innerHTML = '<span class="attention-icon">&#9888;</span><div>' +
+        '<div>' + escapeHtml(item.summary) + '</div>' +
+        (item.detail ? '<div class="loop-detail-attention-detail">' + escapeHtml(item.detail) + '</div>' : '') +
+        '</div>';
+      attentionEl.appendChild(itemEl);
+    });
+    attentionEl.style.display = '';
+  } else {
+    attentionEl.style.display = 'none';
+  }
+}
+
+function closeLoopDetail() {
+  activeLoopDetailId = null;
+  loopDetailViewingLive = false;
+  var listEl = document.getElementById('loops-list');
+  var detailEl = document.getElementById('loop-detail-panel');
+  var headerEl = document.querySelector('#tab-loops .explorer-section-header');
+
+  detailEl.style.display = 'none';
+  listEl.style.display = '';
+  if (headerEl) headerEl.style.display = '';
+}
+
+document.getElementById('btn-loop-detail-back').addEventListener('click', closeLoopDetail);
+
+document.getElementById('loop-detail-run-select').addEventListener('change', function () {
+  if (!activeLoopDetailId) return;
+  if (this.value === 'live') {
+    // Switch back to live view
+    window.electronAPI.getLoopsForProject(activeProjectKey).then(function (loops) {
+      var loop = loops.find(function (l) { return l.id === activeLoopDetailId; });
+      if (loop) switchToLiveView(loop);
+    });
+  } else if (this.value) {
+    switchToRunView(activeLoopDetailId, this.value);
+  }
+});
+
+// ============================================================
 // Loop Modal (New / Edit)
 // ============================================================
 
@@ -5333,8 +5545,7 @@ function openLoopModal(existingLoop) {
 
   document.getElementById('loop-name').value = existingLoop ? existingLoop.name : '';
   document.getElementById('loop-prompt').value = existingLoop ? existingLoop.prompt : '';
-  document.getElementById('loop-budget').value = existingLoop ? existingLoop.budgetPerRun : 0.50;
-  document.getElementById('loop-max-turns').value = existingLoop ? existingLoop.maxTurns : 15;
+
 
   var schedType = existingLoop ? existingLoop.schedule.type : 'interval';
   document.getElementById('loop-schedule-type').value = schedType;
@@ -5363,6 +5574,8 @@ function openLoopModal(existingLoop) {
       cb.checked = existingLoop.schedule.days ? existingLoop.schedule.days.indexOf(cb.value) !== -1 : false;
     });
   }
+
+  document.getElementById('loop-skip-permissions').checked = existingLoop ? !!existingLoop.skipPermissions : false;
 
   document.getElementById('loop-modal-overlay').classList.remove('hidden');
   document.getElementById('loop-name').focus();
@@ -5399,12 +5612,11 @@ function saveLoop() {
     schedule = { type: 'time_of_day', hour: parseInt(timeParts[0]), minute: parseInt(timeParts[1]), days: days };
   }
 
-  var budget = parseFloat(document.getElementById('loop-budget').value) || 0.50;
-  var maxTurns = parseInt(document.getElementById('loop-max-turns').value) || 15;
+  var skipPermissions = document.getElementById('loop-skip-permissions').checked;
 
   if (loopEditingId) {
     window.electronAPI.updateLoop(loopEditingId, {
-      name: name, prompt: prompt, schedule: schedule, budgetPerRun: budget, maxTurns: maxTurns
+      name: name, prompt: prompt, schedule: schedule, skipPermissions: skipPermissions
     }).then(function () {
       closeLoopModal();
       refreshLoops();
@@ -5413,7 +5625,7 @@ function saveLoop() {
   } else {
     window.electronAPI.createLoop({
       name: name, prompt: prompt, projectPath: activeProjectKey, schedule: schedule,
-      budgetPerRun: budget, maxTurns: maxTurns, createdBy: 'ui'
+      skipPermissions: skipPermissions, createdBy: 'ui'
     }).then(function () {
       closeLoopModal();
       refreshLoops();
@@ -5425,6 +5637,13 @@ function saveLoop() {
 document.getElementById('loop-schedule-type').addEventListener('change', function () {
   toggleScheduleFields(this.value);
 });
+// Prevent keyboard shortcuts from stealing input in loop modal
+['loop-name', 'loop-prompt'].forEach(function (id) {
+  document.getElementById(id).addEventListener('keydown', function (e) {
+    e.stopPropagation();
+  });
+});
+
 document.getElementById('btn-loop-modal-close').addEventListener('click', closeLoopModal);
 document.getElementById('btn-loop-cancel').addEventListener('click', closeLoopModal);
 document.getElementById('btn-loop-save').addEventListener('click', saveLoop);
@@ -5586,18 +5805,58 @@ document.getElementById('btn-loops-global-toggle').addEventListener('click', fun
 window.electronAPI.onLoopRunStarted(function (data) {
   refreshLoops();
   refreshLoopsFlyout();
+  updateLoopsTabIndicator();
+  // If we're viewing this loop's detail, refresh it
+  if (activeLoopDetailId === data.loopId) {
+    window.electronAPI.getLoopsForProject(activeProjectKey).then(function (loops) {
+      var loop = loops.find(function (l) { return l.id === data.loopId; });
+      if (loop) openLoopDetail(loop);
+    });
+  }
+});
+
+window.electronAPI.onLoopOutput(function (data) {
+  if (activeLoopDetailId === data.loopId && loopDetailViewingLive) {
+    var outputEl = document.getElementById('loop-detail-output');
+    if (outputEl) {
+      // Clear processing indicator on first real output
+      var indicator = outputEl.querySelector('.loop-processing-indicator');
+      if (indicator) outputEl.textContent = '';
+      outputEl.textContent += data.chunk;
+      outputEl.scrollTop = outputEl.scrollHeight;
+    }
+  }
 });
 
 window.electronAPI.onLoopRunCompleted(function (data) {
   refreshLoops();
   refreshLoopsFlyout();
   updateLoopSidebarBadges();
+  updateLoopsTabIndicator();
+  // If viewing this loop, refresh to show completed state
+  if (activeLoopDetailId === data.loopId) {
+    window.electronAPI.getLoopsForProject(activeProjectKey).then(function (loops) {
+      var loop = loops.find(function (l) { return l.id === data.loopId; });
+      if (loop) openLoopDetail(loop);
+    });
+  }
 
   if (data.attentionItems && data.attentionItems.length > 0) {
     var flyoutBtn = document.getElementById('btn-loops-flyout');
     if (flyoutBtn) flyoutBtn.classList.add('has-attention');
   }
 });
+
+function updateLoopsTabIndicator() {
+  window.electronAPI.getLoops().then(function (data) {
+    var anyRunning = data.loops.some(function (loop) { return !!loop.currentRunStartedAt; });
+    var tab = document.querySelector('.explorer-tab[data-tab="loops"]');
+    if (tab) {
+      if (anyRunning) tab.classList.add('has-running');
+      else tab.classList.remove('has-running');
+    }
+  });
+}
 
 function updateLoopSidebarBadges() {
   window.electronAPI.getLoops().then(function (data) {
@@ -5642,56 +5901,20 @@ function updateLoopSidebarBadges() {
 // Conversational Loop Setup
 // ============================================================
 
-document.getElementById('btn-ask-claude-loop').addEventListener('click', function () {
-  if (!activeProjectKey) { alert('Select a project first.'); return; }
-
-  var setupPrompt = 'The user wants to create a scheduled background loop for their project at ' + activeProjectKey + '. ' +
-    'Ask them what they want to monitor or check, how often it should run, and any budget constraints. ' +
-    'When you have enough info, output a structured JSON config block wrapped in :::loop-config markers like this:\n' +
-    ':::loop-config\n' +
-    '{"name": "...", "prompt": "...", "schedule": {"type": "interval", "minutes": 60}, "budgetPerRun": 0.50, "maxTurns": 15}\n' +
-    ':::loop-config\n' +
-    'The user can then refine the config by asking you to change values.';
-
-  addColumn(['-p', setupPrompt], null, { title: 'Loop Setup', isLoopSetup: true });
+// Copy output button
+document.getElementById('btn-loop-copy-output').addEventListener('click', function () {
+  var outputEl = document.getElementById('loop-detail-output');
+  var text = outputEl.textContent;
+  if (!text) return;
+  window.electronAPI.clipboardWriteText(text);
+  var btn = this;
+  btn.classList.add('copied');
+  btn.textContent = 'Copied!';
+  setTimeout(function () {
+    btn.classList.remove('copied');
+    btn.innerHTML = '&#128203;';
+  }, 2000);
 });
-
-function checkLoopConfig(colId, data) {
-  var col = allColumns.get(colId);
-  if (!col || !col.isLoopSetup) return;
-
-  if (!col._loopSetupBuffer) col._loopSetupBuffer = '';
-  col._loopSetupBuffer += data;
-
-  var match = col._loopSetupBuffer.match(/:::loop-config\s*\n([\s\S]*?)\n\s*:::loop-config/);
-  if (match) {
-    try {
-      var configData = JSON.parse(match[1]);
-      window.electronAPI.createLoop(Object.assign({
-        projectPath: activeProjectKey,
-        createdBy: 'claude'
-      }, configData)).then(function (loop) {
-        refreshLoops();
-        refreshLoopsFlyout();
-        if (col.headerEl) {
-          var toast = document.createElement('div');
-          toast.style.cssText = 'position:absolute;top:28px;left:0;right:0;background:#22c55e;color:#fff;padding:6px 12px;font-size:11px;z-index:100;text-align:center;';
-          toast.textContent = 'Loop "' + (configData.name || 'Untitled') + '" created!';
-          col.element.style.position = 'relative';
-          col.element.appendChild(toast);
-          setTimeout(function () { toast.remove(); }, 4000);
-        }
-      });
-      col._loopSetupBuffer = '';
-    } catch (e) {
-      // JSON parse failed — wait for more data
-    }
-  }
-
-  if (col._loopSetupBuffer.length > 100000) {
-    col._loopSetupBuffer = col._loopSetupBuffer.substring(col._loopSetupBuffer.length - 10000);
-  }
-}
 
 // --- Auto Update Notifications ---
 

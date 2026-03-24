@@ -90,7 +90,6 @@
             <span>LOOPS</span>
             <div style="display:flex;gap:4px;">
               <button class="explorer-refresh" id="btn-add-loop" title="New Loop">+</button>
-              <button class="explorer-refresh" id="btn-ask-claude-loop" title="Ask Claude to set it up">&#9993;</button>
               <button class="explorer-refresh" id="btn-refresh-loops" title="Refresh">&#8635;</button>
             </div>
           </div>
@@ -98,6 +97,24 @@
             <p style="opacity:0.5;text-align:center;padding:2rem 1rem;font-size:12px;">Select a project to see its loops</p>
           </div>
           <div id="loops-list"></div>
+          <div id="loop-detail-panel" class="loop-detail-panel" style="display:none;">
+            <div class="loop-detail-header">
+              <button id="btn-loop-detail-back" class="loop-detail-back" title="Back to list">&larr;</button>
+              <span id="loop-detail-name" class="loop-detail-name"></span>
+              <span id="loop-detail-status-badge" class="loop-status-badge"></span>
+            </div>
+            <div class="loop-detail-meta" id="loop-detail-meta"></div>
+            <div id="loop-detail-summary" class="loop-detail-summary" style="display:none;"></div>
+            <div id="loop-detail-attention" class="loop-detail-attention" style="display:none;"></div>
+            <div class="loop-detail-output-header">
+              <span>Output</span>
+              <div class="loop-detail-output-controls">
+                <button id="btn-loop-copy-output" class="loop-detail-copy-btn" title="Copy output">&#128203;</button>
+                <select id="loop-detail-run-select" class="loop-detail-run-select"></select>
+              </div>
+            </div>
+            <pre id="loop-detail-output" class="loop-detail-output"></pre>
+          </div>
         </div>
       </div>
     </div>
@@ -307,21 +324,21 @@
   </div>
 
     <div id="loop-modal-overlay" class="modal-overlay hidden">
-      <div class="modal loop-modal">
+      <div class="modal-dialog loop-modal">
         <div class="modal-header">
-          <span id="loop-modal-title">New Loop</span>
+          <span class="modal-title" id="loop-modal-title">New Loop</span>
           <button class="modal-close" id="btn-loop-modal-close">&times;</button>
         </div>
-        <div class="modal-body">
-          <div class="form-group">
+        <div class="modal-body loop-modal-body">
+          <div class="loop-form-group">
             <label for="loop-name">Name</label>
-            <input type="text" id="loop-name" placeholder="e.g. Check failing tests" spellcheck="false">
+            <input type="text" id="loop-name" class="loop-input" placeholder="e.g. Check failing tests" spellcheck="false">
           </div>
-          <div class="form-group">
+          <div class="loop-form-group">
             <label for="loop-prompt">Prompt</label>
-            <textarea id="loop-prompt" rows="6" placeholder="What should Claude do each time this runs?" spellcheck="false"></textarea>
+            <textarea id="loop-prompt" class="loop-textarea" rows="6" placeholder="What should Claude do each time this runs?" spellcheck="false"></textarea>
           </div>
-          <div class="form-group">
+          <div class="loop-form-group">
             <label>Schedule</label>
             <div class="loop-schedule-row">
               <select id="loop-schedule-type">
@@ -349,20 +366,19 @@
               </div>
             </div>
           </div>
-          <div class="form-group form-row">
-            <div>
-              <label for="loop-budget">Budget per run ($)</label>
-              <input type="number" id="loop-budget" min="0.01" step="0.01" value="0.50" style="width:80px">
-            </div>
-            <div>
-              <label for="loop-max-turns">Max turns</label>
-              <input type="number" id="loop-max-turns" min="1" value="15" style="width:60px">
+          <div class="loop-form-group">
+            <label>Permissions</label>
+            <div class="loop-permissions">
+              <label class="loop-permission-option">
+                <input type="checkbox" id="loop-skip-permissions">
+                <span>Skip permissions <span class="loop-permission-hint">(allow file edits, bash, etc.)</span></span>
+              </label>
             </div>
           </div>
         </div>
         <div class="modal-footer">
-          <button id="btn-loop-save" class="modal-btn modal-btn-primary">Create Loop</button>
-          <button id="btn-loop-cancel" class="modal-btn">Cancel</button>
+          <button id="btn-loop-save" class="modal-btn-save">Create Loop</button>
+          <button id="btn-loop-cancel" class="modal-btn-save">Cancel</button>
         </div>
       </div>
     </div>

@@ -74,6 +74,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   toggleLoopsGlobal: () => ipcRenderer.invoke('loops:toggleGlobal'),
   runLoopNow: (loopId) => ipcRenderer.invoke('loops:runNow', loopId),
   getLoopHistory: (loopId, count) => ipcRenderer.invoke('loops:getHistory', loopId, count),
+  getLoopRunDetail: (loopId, startedAt) => ipcRenderer.invoke('loops:getRunDetail', loopId, startedAt),
+  getLoopLiveOutput: (loopId) => ipcRenderer.invoke('loops:getLiveOutput', loopId),
   onLoopRunStarted: (callback) => ipcRenderer.on('loops:run-started', (_, data) => callback(data)),
-  onLoopRunCompleted: (callback) => ipcRenderer.on('loops:run-completed', (_, data) => callback(data))
+  onLoopRunCompleted: (callback) => ipcRenderer.on('loops:run-completed', (_, data) => callback(data)),
+  onLoopOutput: (callback) => ipcRenderer.on('loops:output', (_, data) => callback(data))
 });
