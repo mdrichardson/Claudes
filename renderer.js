@@ -816,6 +816,8 @@ function createColumnHeader(id, customTitle, opts) {
     toggleMaximizeColumn(id);
   });
 
+  if (!opts.isDiff) setupColumnDrag(header, id);
+
   return header;
 }
 
@@ -941,6 +943,7 @@ function addColumn(args, targetRow, opts) {
   col.appendChild(header);
   col.appendChild(termWrapper);
   col.appendChild(scrollBtn);
+  setupColumnDropTarget(col);
   row.el.appendChild(col);
 
   var terminal = new Terminal({
@@ -1973,6 +1976,7 @@ function setupResizeHandle(handle) {
     rightColEl.style.flex = 'none';
     leftColEl.style.width = leftStartWidth + 'px';
     rightColEl.style.width = rightStartWidth + 'px';
+    document.body.style.cursor = 'col-resize';
 
     function onMouseMove(ev) {
       var delta = ev.clientX - startX;
@@ -1986,6 +1990,7 @@ function setupResizeHandle(handle) {
     }
     function onMouseUp() {
       handle.classList.remove('active');
+      document.body.style.cursor = '';
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseup', onMouseUp);
     }
@@ -2025,6 +2030,7 @@ function setupRowResizeHandle(handle) {
     bottomEl.style.flex = 'none';
     topEl.style.height = topStartHeight + 'px';
     bottomEl.style.height = bottomStartHeight + 'px';
+    document.body.style.cursor = 'row-resize';
 
     function onMouseMove(ev) {
       var delta = ev.clientY - startY;
@@ -2038,12 +2044,175 @@ function setupRowResizeHandle(handle) {
     }
     function onMouseUp() {
       handle.classList.remove('active');
+      document.body.style.cursor = '';
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseup', onMouseUp);
     }
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('mouseup', onMouseUp);
   });
+}
+
+// ============================================================
+// Column Drag-and-Drop Reordering
+// ============================================================
+
+var dragSourceColumnId = null;
+var dropIndicatorEl = null;
+
+function setupColumnDrag(headerEl, columnId) {
+  headerEl.draggable = true;
+
+  headerEl.addEventListener('dragstart', function (e) {
+    // Don't drag if editing title or maximized
+    if (headerEl.querySelector('[contenteditable="true"]')) { e.preventDefault(); return; }
+    var state = getActiveState();
+    if (state && state.maximizedColumnId) { e.preventDefault(); return; }
+
+    dragSourceColumnId = columnId;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(columnId));
+
+    var col = allColumns.get(columnId);
+    if (col) {
+      setTimeout(function () { col.element.classList.add('dragging'); }, 0);
+    }
+  });
+
+  headerEl.addEventListener('dragend', function () {
+    var col = allColumns.get(columnId);
+    if (col) col.element.classList.remove('dragging');
+    dragSourceColumnId = null;
+    removeDropIndicator();
+  });
+}
+
+function setupColumnDropTarget(colEl) {
+  colEl.addEventListener('dragover', function (e) {
+    if (dragSourceColumnId === null) return;
+    var targetId = parseInt(colEl.dataset.id);
+    if (targetId === dragSourceColumnId) return;
+
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+
+    var rect = colEl.getBoundingClientRect();
+    var midX = rect.left + rect.width / 2;
+    var side = e.clientX < midX ? 'left' : 'right';
+    showDropIndicator(colEl, side);
+  });
+
+  colEl.addEventListener('dragleave', function (e) {
+    if (!colEl.contains(e.relatedTarget)) removeDropIndicator();
+  });
+
+  colEl.addEventListener('drop', function (e) {
+    e.preventDefault();
+    if (dragSourceColumnId === null) return;
+
+    var targetId = parseInt(colEl.dataset.id);
+    if (targetId === dragSourceColumnId) { removeDropIndicator(); return; }
+
+    var state = getActiveState();
+    if (!state) { removeDropIndicator(); return; }
+
+    var targetRow = findRowForColumn(state, targetId);
+    if (!targetRow) { removeDropIndicator(); return; }
+
+    var rect = colEl.getBoundingClientRect();
+    var midX = rect.left + rect.width / 2;
+    var targetIdx = targetRow.columnIds.indexOf(targetId);
+    var insertIdx = e.clientX < midX ? targetIdx : targetIdx + 1;
+
+    moveColumnToPosition(dragSourceColumnId, targetRow, insertIdx);
+    removeDropIndicator();
+  });
+}
+
+function showDropIndicator(targetEl, side) {
+  if (!dropIndicatorEl) {
+    dropIndicatorEl = document.createElement('div');
+    dropIndicatorEl.className = 'drop-indicator';
+  }
+  targetEl.style.position = 'relative';
+  dropIndicatorEl.style.left = side === 'left' ? '-2px' : '';
+  dropIndicatorEl.style.right = side === 'right' ? '-2px' : '';
+  if (dropIndicatorEl.parentElement !== targetEl) {
+    targetEl.appendChild(dropIndicatorEl);
+  }
+}
+
+function removeDropIndicator() {
+  if (dropIndicatorEl && dropIndicatorEl.parentElement) {
+    dropIndicatorEl.parentElement.removeChild(dropIndicatorEl);
+  }
+}
+
+function moveColumnToPosition(columnId, targetRow, insertIndex) {
+  var state = getActiveState();
+  if (!state) return;
+
+  var sourceRow = findRowForColumn(state, columnId);
+  if (!sourceRow) return;
+
+  var srcIdx = sourceRow.columnIds.indexOf(columnId);
+  if (srcIdx === -1) return;
+
+  // Same row, same position — no-op
+  if (sourceRow === targetRow) {
+    if (insertIndex === srcIdx || insertIndex === srcIdx + 1) return;
+    if (insertIndex > srcIdx) insertIndex--;
+  }
+
+  // Remove from source
+  sourceRow.columnIds.splice(srcIdx, 1);
+
+  // Insert into target
+  targetRow.columnIds.splice(insertIndex, 0, columnId);
+
+  // Rebuild DOM for affected rows
+  rebuildRowDOM(targetRow);
+  if (sourceRow !== targetRow) {
+    rebuildRowDOM(sourceRow);
+    removeRowIfEmpty(state, sourceRow);
+  }
+
+  // Reset flex/width on all columns in affected rows
+  targetRow.columnIds.forEach(function (cid) {
+    var c = allColumns.get(cid);
+    if (c) { c.element.style.flex = ''; c.element.style.width = ''; }
+  });
+  if (sourceRow !== targetRow) {
+    sourceRow.columnIds.forEach(function (cid) {
+      var c = allColumns.get(cid);
+      if (c) { c.element.style.flex = ''; c.element.style.width = ''; }
+    });
+  }
+
+  refitAll();
+}
+
+function rebuildRowDOM(row) {
+  // Remove all existing resize handles
+  var handles = row.el.querySelectorAll('.resize-handle');
+  handles.forEach(function (h) { h.remove(); });
+
+  // Re-append columns in order with resize handles between them
+  for (var i = 0; i < row.columnIds.length; i++) {
+    var col = allColumns.get(row.columnIds[i]);
+    if (!col) continue;
+
+    if (i > 0) {
+      var handle = document.createElement('div');
+      handle.className = 'resize-handle';
+      handle.dataset.leftColumnId = String(row.columnIds[i - 1]);
+      handle.dataset.rightColumnId = String(row.columnIds[i]);
+      row.el.appendChild(handle);
+      setupResizeHandle(handle);
+    }
+
+    row.el.appendChild(col.element); // appendChild moves existing elements
+  }
 }
 
 // ============================================================

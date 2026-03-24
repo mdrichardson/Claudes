@@ -627,17 +627,32 @@ html, body {
 }
 
 .row-resize-handle {
-  height: 5px;
+  height: 8px;
   cursor: row-resize;
   background: transparent;
   flex-shrink: 0;
   z-index: 10;
+  position: relative;
+  transition: background 0.15s ease;
 }
 
-.row-resize-handle:hover,
-.row-resize-handle.active {
-  background: var(--accent);
+.row-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 24px;
+  height: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background 0.15s ease;
 }
+
+.row-resize-handle:hover { background: rgba(233, 69, 96, 0.15); }
+.row-resize-handle:hover::after,
+.row-resize-handle.active::after { background: var(--accent); }
+.row-resize-handle.active { background: rgba(233, 69, 96, 0.25); }
 
 .column {
   display: flex;
@@ -918,16 +933,57 @@ html, body {
 
 /* Resize handle between columns */
 .resize-handle {
-  width: 5px;
+  width: 8px;
   cursor: col-resize;
   background: transparent;
   flex-shrink: 0;
   z-index: 10;
+  position: relative;
+  transition: background 0.15s ease;
 }
 
-.resize-handle:hover,
-.resize-handle.active {
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 24px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.resize-handle:hover { background: rgba(233, 69, 96, 0.15); }
+.resize-handle:hover::after,
+.resize-handle.active::after { background: var(--accent); }
+.resize-handle.active { background: rgba(233, 69, 96, 0.25); }
+
+/* Column drag-and-drop */
+.column.dragging {
+  opacity: 0.3;
+  outline: 2px dashed var(--accent);
+}
+
+.column-header[draggable="true"] {
+  cursor: grab;
+}
+
+.column-header[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.drop-indicator {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
   background: var(--accent);
+  z-index: 100;
+  pointer-events: none;
+  border-radius: 2px;
+  box-shadow: 0 0 8px rgba(233, 69, 96, 0.5);
 }
 
 /* xterm overrides */
