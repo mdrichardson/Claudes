@@ -367,6 +367,20 @@
             </div>
           </div>
           <div class="loop-form-group">
+            <label>Database <span class="loop-permission-hint">(optional)</span></label>
+            <input type="password" id="loop-db-connection" class="loop-input" placeholder="mongodb+srv://readonly_user:pass@cluster.mongodb.net/dbname" spellcheck="false" autocomplete="off">
+            <div class="loop-permissions" style="margin-top:6px;">
+              <label class="loop-permission-option">
+                <input type="checkbox" id="loop-db-readonly" checked>
+                <span>Read-only <span class="loop-permission-hint">(block all write/delete/drop operations)</span></span>
+              </label>
+              <label class="loop-permission-option">
+                <input type="checkbox" id="loop-db-show">
+                <span>Show connection string</span>
+              </label>
+            </div>
+          </div>
+          <div class="loop-form-group">
             <label>Permissions</label>
             <div class="loop-permissions">
               <label class="loop-permission-option">

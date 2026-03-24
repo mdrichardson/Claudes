@@ -1039,7 +1039,7 @@ ipcMain.handle('loops:update', (event, loopId, updates) => {
   const data = readLoops();
   const loop = data.loops.find(l => l.id === loopId);
   if (!loop) return null;
-  const safeFields = ['name', 'prompt', 'schedule', 'enabled', 'skipPermissions'];
+  const safeFields = ['name', 'prompt', 'schedule', 'enabled', 'skipPermissions', 'dbConnectionString', 'dbReadOnly'];
   safeFields.forEach(field => {
     if (updates[field] !== undefined) loop[field] = updates[field];
   });
@@ -1222,6 +1222,44 @@ function runLoop(loopId) {
   const args = ['--print', fullPrompt, '--output-format', 'stream-json', '--verbose'];
   if (loop.skipPermissions) args.push('--dangerously-skip-permissions');
 
+  // Database MCP config
+  let mcpConfigPath = null;
+  if (loop.dbConnectionString) {
+    const mcpArgs = ['-y', 'mongodb-mcp-server@latest'];
+    if (loop.dbReadOnly !== false) mcpArgs.push('--readOnly');
+    const mcpConfig = {
+      mcpServers: {
+        mongodb: {
+          command: 'npx',
+          args: mcpArgs,
+          env: {
+            MDB_MCP_CONNECTION_STRING: loop.dbConnectionString
+          }
+        }
+      }
+    };
+    mcpConfigPath = path.join(LOOPS_RUNS_DIR, loopId + '_mcp.json');
+    fs.mkdirSync(path.dirname(mcpConfigPath), { recursive: true });
+    fs.writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig), 'utf8');
+    args.push('--mcp-config', mcpConfigPath);
+
+    // Block write operations when read-only
+    if (loop.dbReadOnly !== false) {
+      const writeTools = [
+        'mcp__mongodb__insert-many',
+        'mcp__mongodb__update-many',
+        'mcp__mongodb__delete-many',
+        'mcp__mongodb__drop-collection',
+        'mcp__mongodb__drop-database',
+        'mcp__mongodb__drop-index',
+        'mcp__mongodb__create-collection',
+        'mcp__mongodb__create-index',
+        'mcp__mongodb__rename-collection'
+      ];
+      args.push('--disallowedTools', writeTools.join(','));
+    }
+  }
+
   const child = spawn(getClaudePath(), args, {
     cwd: loop.projectPath,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -1277,6 +1315,8 @@ function runLoop(loopId) {
   child.on('close', (exitCode) => {
     runningLoops.delete(loopId);
     liveOutputBuffers.delete(loopId);
+    // Clean up temp MCP config
+    if (mcpConfigPath) try { fs.unlinkSync(mcpConfigPath); } catch { /* ignore */ }
 
     const completedAt = new Date().toISOString();
     const displayOutput = textChunks.join('');
@@ -1334,6 +1374,7 @@ function runLoop(loopId) {
 
   child.on('error', (err) => {
     runningLoops.delete(loopId);
+    if (mcpConfigPath) try { fs.unlinkSync(mcpConfigPath); } catch { /* ignore */ }
     const freshData = readLoops();
     const freshLoop = freshData.loops.find((l) => l.id === loopId);
     if (freshLoop) {

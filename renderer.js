@@ -5576,6 +5576,10 @@ function openLoopModal(existingLoop) {
   }
 
   document.getElementById('loop-skip-permissions').checked = existingLoop ? !!existingLoop.skipPermissions : false;
+  document.getElementById('loop-db-connection').value = existingLoop ? (existingLoop.dbConnectionString || '') : '';
+  document.getElementById('loop-db-connection').type = 'password';
+  document.getElementById('loop-db-readonly').checked = existingLoop ? (existingLoop.dbReadOnly !== false) : true;
+  document.getElementById('loop-db-show').checked = false;
 
   document.getElementById('loop-modal-overlay').classList.remove('hidden');
   document.getElementById('loop-name').focus();
@@ -5613,10 +5617,13 @@ function saveLoop() {
   }
 
   var skipPermissions = document.getElementById('loop-skip-permissions').checked;
+  var dbConnectionString = document.getElementById('loop-db-connection').value.trim() || null;
+  var dbReadOnly = document.getElementById('loop-db-readonly').checked;
 
   if (loopEditingId) {
     window.electronAPI.updateLoop(loopEditingId, {
-      name: name, prompt: prompt, schedule: schedule, skipPermissions: skipPermissions
+      name: name, prompt: prompt, schedule: schedule, skipPermissions: skipPermissions,
+      dbConnectionString: dbConnectionString, dbReadOnly: dbReadOnly
     }).then(function () {
       closeLoopModal();
       refreshLoops();
@@ -5625,7 +5632,8 @@ function saveLoop() {
   } else {
     window.electronAPI.createLoop({
       name: name, prompt: prompt, projectPath: activeProjectKey, schedule: schedule,
-      skipPermissions: skipPermissions, createdBy: 'ui'
+      skipPermissions: skipPermissions, dbConnectionString: dbConnectionString,
+      dbReadOnly: dbReadOnly, createdBy: 'ui'
     }).then(function () {
       closeLoopModal();
       refreshLoops();
@@ -5638,10 +5646,15 @@ document.getElementById('loop-schedule-type').addEventListener('change', functio
   toggleScheduleFields(this.value);
 });
 // Prevent keyboard shortcuts from stealing input in loop modal
-['loop-name', 'loop-prompt'].forEach(function (id) {
+['loop-name', 'loop-prompt', 'loop-db-connection'].forEach(function (id) {
   document.getElementById(id).addEventListener('keydown', function (e) {
     e.stopPropagation();
   });
+});
+
+// Show/hide connection string toggle
+document.getElementById('loop-db-show').addEventListener('change', function () {
+  document.getElementById('loop-db-connection').type = this.checked ? 'text' : 'password';
 });
 
 document.getElementById('btn-loop-modal-close').addEventListener('click', closeLoopModal);
