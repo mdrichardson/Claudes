@@ -62,5 +62,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onHookEvent: (callback) => ipcRenderer.on('hook:event', (_, event) => callback(event)),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
   showItemInFolder: (fullPath) => ipcRenderer.invoke('shell:showItemInFolder', fullPath),
-  openPath: (fullPath) => ipcRenderer.invoke('shell:openPath', fullPath)
+  openPath: (fullPath) => ipcRenderer.invoke('shell:openPath', fullPath),
+
+  // Loops
+  getLoops: () => ipcRenderer.invoke('loops:getAll'),
+  getLoopsForProject: (projectPath) => ipcRenderer.invoke('loops:getForProject', projectPath),
+  createLoop: (config) => ipcRenderer.invoke('loops:create', config),
+  updateLoop: (loopId, updates) => ipcRenderer.invoke('loops:update', loopId, updates),
+  deleteLoop: (loopId) => ipcRenderer.invoke('loops:delete', loopId),
+  toggleLoop: (loopId) => ipcRenderer.invoke('loops:toggle', loopId),
+  toggleLoopsGlobal: () => ipcRenderer.invoke('loops:toggleGlobal'),
+  runLoopNow: (loopId) => ipcRenderer.invoke('loops:runNow', loopId),
+  getLoopHistory: (loopId, count) => ipcRenderer.invoke('loops:getHistory', loopId, count),
+  onLoopRunStarted: (callback) => ipcRenderer.on('loops:run-started', (_, data) => callback(data)),
+  onLoopRunCompleted: (callback) => ipcRenderer.on('loops:run-completed', (_, data) => callback(data))
 });
