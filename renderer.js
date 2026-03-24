@@ -2269,6 +2269,10 @@ function showFileTreeContextMenu(e, entry) {
 
 function refreshFileTree() {
   if (!activeProjectKey || !window.electronAPI) return;
+  // Clear search state on refresh
+  fileSearchInput.value = '';
+  fileSearchResults.style.display = 'none';
+  fileTreeEl.style.display = '';
   while (fileTreeEl.firstChild) fileTreeEl.removeChild(fileTreeEl.firstChild);
   window.electronAPI.readDir(activeProjectKey).then(function (entries) {
     for (var i = 0; i < entries.length; i++) {
@@ -2276,6 +2280,77 @@ function refreshFileTree() {
     }
   });
 }
+
+// File search
+var fileSearchInput = document.getElementById('file-search-input');
+var fileSearchResults = document.getElementById('file-search-results');
+var fileSearchTimer = null;
+
+fileSearchInput.addEventListener('input', function () {
+  clearTimeout(fileSearchTimer);
+  var query = fileSearchInput.value.trim();
+  if (!query) {
+    fileSearchResults.style.display = 'none';
+    fileTreeEl.style.display = '';
+    return;
+  }
+  fileSearchTimer = setTimeout(function () {
+    if (!activeProjectKey) return;
+    window.electronAPI.searchFiles(activeProjectKey, query).then(function (results) {
+      while (fileSearchResults.firstChild) fileSearchResults.removeChild(fileSearchResults.firstChild);
+      fileTreeEl.style.display = 'none';
+      fileSearchResults.style.display = '';
+      if (results.length === 0) {
+        var empty = document.createElement('div');
+        empty.className = 'search-no-results';
+        empty.textContent = 'No files found';
+        fileSearchResults.appendChild(empty);
+        return;
+      }
+      for (var i = 0; i < results.length; i++) {
+        (function (result) {
+          var row = document.createElement('div');
+          row.className = 'search-result-row';
+          if (result.isDirectory) row.classList.add('search-result-folder');
+
+          var nameEl = document.createElement('span');
+          nameEl.className = 'search-result-name';
+          nameEl.textContent = result.name;
+
+          var pathEl = document.createElement('span');
+          pathEl.className = 'search-result-path';
+          pathEl.textContent = result.relativePath;
+
+          row.appendChild(nameEl);
+          row.appendChild(pathEl);
+
+          row.addEventListener('click', function () {
+            if (!result.isDirectory) {
+              openFileEditor(result.path);
+            }
+          });
+
+          row.addEventListener('contextmenu', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            showFileTreeContextMenu(e, result);
+          });
+
+          fileSearchResults.appendChild(row);
+        })(results[i]);
+      }
+    });
+  }, 200);
+});
+
+fileSearchInput.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') {
+    fileSearchInput.value = '';
+    fileSearchResults.style.display = 'none';
+    fileTreeEl.style.display = '';
+    fileSearchInput.blur();
+  }
+});
 
 function createTreeItem(entry, level) {
   var item = document.createElement('div');

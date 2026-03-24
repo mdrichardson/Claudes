@@ -313,6 +313,33 @@ ipcMain.handle('fs:readDir', (event, dirPath) => {
   }
 });
 
+ipcMain.handle('fs:searchFiles', (event, rootDir, query) => {
+  const excluded = new Set(['node_modules', '.git', '__pycache__', '.next', '.nuxt', 'dist', '.cache', 'coverage']);
+  const results = [];
+  const lowerQuery = query.toLowerCase();
+  const MAX_RESULTS = 100;
+
+  function walk(dir) {
+    if (results.length >= MAX_RESULTS) return;
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const e of entries) {
+        if (results.length >= MAX_RESULTS) return;
+        if (excluded.has(e.name)) continue;
+        const fullPath = path.join(dir, e.name);
+        const relativePath = path.relative(rootDir, fullPath);
+        if (e.name.toLowerCase().includes(lowerQuery)) {
+          results.push({ name: e.name, path: fullPath, relativePath, isDirectory: e.isDirectory() });
+        }
+        if (e.isDirectory()) walk(fullPath);
+      }
+    } catch { /* skip inaccessible dirs */ }
+  }
+
+  walk(rootDir);
+  return results;
+});
+
 ipcMain.handle('git:status', (event, projectPath) => {
   try {
     const output = execFileSync('git', ['status', '--porcelain'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 });

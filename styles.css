@@ -1378,6 +1378,78 @@ html, body {
   color: var(--text-primary);
 }
 
+/* File Search */
+
+.explorer-search-bar {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.explorer-search-bar input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-medium);
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  color: var(--text-body);
+  font-size: 12px;
+  padding: 4px 8px;
+  outline: none;
+  font-family: inherit;
+}
+
+.explorer-search-bar input:focus {
+  border-color: var(--accent);
+}
+
+.explorer-search-bar input::placeholder {
+  color: var(--text-dimmer);
+}
+
+#file-search-results {
+  overflow-y: auto;
+  flex: 1;
+}
+
+.search-result-row {
+  display: flex;
+  flex-direction: column;
+  padding: 3px 12px;
+  cursor: pointer;
+  gap: 1px;
+}
+
+.search-result-row:hover {
+  background: var(--hover-medium);
+}
+
+.search-result-row.search-result-folder {
+  opacity: 0.7;
+}
+
+.search-result-name {
+  font-size: 12px;
+  color: var(--text-body);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-result-path {
+  font-size: 10px;
+  color: var(--text-dimmer);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-no-results {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--text-dimmer);
+  text-align: center;
+}
+
 /* File Tree */
 
 .tree-row {
@@ -1891,7 +1963,8 @@ html, body {
   font-size: 11px;
   color: var(--text-dimmer);
   flex-shrink: 0;
-  width: 44px;
+  min-width: 58px;
+  overflow: hidden;
 }
 
 .git-graph-msg {

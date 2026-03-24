@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   readClaudeMd: (projectPath) => ipcRenderer.invoke('claudemd:read', projectPath),
   saveClaudeMd: (projectPath, content) => ipcRenderer.invoke('claudemd:save', projectPath, content),
   readDir: (dirPath) => ipcRenderer.invoke('fs:readDir', dirPath),
+  searchFiles: (rootDir, query) => ipcRenderer.invoke('fs:searchFiles', rootDir, query),
   readFile: (filePath) => ipcRenderer.invoke('fs:readFile', filePath),
   writeFile: (filePath, content) => ipcRenderer.invoke('fs:writeFile', filePath, content),
   gitStatus: (projectPath) => ipcRenderer.invoke('git:status', projectPath),
