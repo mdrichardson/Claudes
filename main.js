@@ -1254,7 +1254,8 @@ function runLoop(loopId) {
         'mcp__mongodb__drop-index',
         'mcp__mongodb__create-collection',
         'mcp__mongodb__create-index',
-        'mcp__mongodb__rename-collection'
+        'mcp__mongodb__rename-collection',
+        'mcp__mongodb__aggregate'
       ];
       args.push('--disallowedTools', writeTools.join(','));
     }
