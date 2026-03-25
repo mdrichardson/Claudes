@@ -3680,7 +3680,18 @@ html, body {
   50% { opacity: 0.4; }
 }
 
-/* Loop tab running indicator */
+/* Loop tab indicator: yellow dot = has loops, green pulsing = running */
+.explorer-tab[data-tab="loops"].has-loops::after {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #eab308;
+  margin-left: 5px;
+  vertical-align: middle;
+}
+
 .explorer-tab[data-tab="loops"].has-running::after {
   content: '';
   display: inline-block;

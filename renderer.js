@@ -402,6 +402,14 @@ function getActiveState() {
   return projectStates.get(activeProjectKey) || null;
 }
 
+function refocusActiveTerminal() {
+  var state = getActiveState();
+  if (state && state.focusedColumnId !== null) {
+    var col = allColumns.get(state.focusedColumnId);
+    if (col && col.terminal) col.terminal.focus();
+  }
+}
+
 function saveColumnCounts() {
   for (var i = 0; i < config.projects.length; i++) {
     var key = config.projects[i].path;
@@ -2368,6 +2376,7 @@ var runEditingOriginalType = null;
 
 // Tab switching
 document.querySelectorAll('.explorer-tab').forEach(function (tab) {
+  tab.addEventListener('mousedown', function (e) { e.preventDefault(); }); // prevent focus steal
   tab.addEventListener('click', function () {
     var tabName = tab.dataset.tab;
     document.querySelectorAll('.explorer-tab').forEach(function (t) { t.classList.remove('active'); });
@@ -2378,6 +2387,18 @@ document.querySelectorAll('.explorer-tab').forEach(function (tab) {
     else if (tabName === 'git') { refreshGitStatus(true); startGitPolling(); }
     else if (tabName === 'run') { stopGitPolling(); showRunListView(); refreshRunConfigs(); }
     else if (tabName === 'loops') { stopGitPolling(); refreshLoops(); }
+    refocusActiveTerminal();
+  });
+});
+
+// Prevent explorer panel and sidebar clicks from stealing terminal focus.
+// Allow actual input/textarea/select elements to still receive focus.
+[explorerPanel, sidebar, document.getElementById('toolbar')].forEach(function (panel) {
+  if (!panel) return;
+  panel.addEventListener('mousedown', function (e) {
+    var tag = e.target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    e.preventDefault();
   });
 });
 
@@ -6030,12 +6051,23 @@ window.electronAPI.onLoopRunCompleted(function (data) {
 });
 
 function updateLoopsTabIndicator() {
-  window.electronAPI.getLoops().then(function (data) {
-    var anyRunning = data.loops.some(function (loop) { return !!loop.currentRunStartedAt; });
+  if (!activeProjectKey) return;
+  window.electronAPI.getLoopsForProject(activeProjectKey).then(function (loops) {
+    var hasLoops = loops.length > 0;
+    var anyRunning = loops.some(function (loop) { return !!loop.currentRunStartedAt; });
     var tab = document.querySelector('.explorer-tab[data-tab="loops"]');
     if (tab) {
-      if (anyRunning) tab.classList.add('has-running');
-      else tab.classList.remove('has-running');
+      // Three states: green pulsing (running), yellow (has loops), no icon (no loops)
+      if (anyRunning) {
+        tab.classList.add('has-running');
+        tab.classList.remove('has-loops');
+      } else if (hasLoops) {
+        tab.classList.remove('has-running');
+        tab.classList.add('has-loops');
+      } else {
+        tab.classList.remove('has-running');
+        tab.classList.remove('has-loops');
+      }
     }
   });
 }

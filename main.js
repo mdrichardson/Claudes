@@ -178,7 +178,7 @@ function createWindow() {
     minWidth: 600,
     minHeight: 400,
     title: 'Claudes',
-    icon: path.join(__dirname, 'icon.ico'),
+    icon: path.join(__dirname, 'icon-tray.ico'),
     backgroundColor: isLight ? '#ffffff' : '#1a1a2e',
     titleBarStyle: 'hidden',
     titleBarOverlay: {
