@@ -27,7 +27,7 @@ var optBare = document.getElementById('opt-bare');
 var optModel = document.getElementById('opt-model');
 var optWorktree = document.getElementById('opt-worktree');
 var optCustomArgs = document.getElementById('opt-custom-args');
-var btnSpawnWithOpts = document.getElementById('btn-spawn-with-opts');
+
 
 var globalColumnId = 0;
 var globalRowId = 0;
@@ -640,6 +640,7 @@ function setActiveProject(index, isStartup) {
   refreshExplorer();
   if (activeLoopDetailId) closeLoopDetail();
   refreshLoops();
+  loadSpawnOptions();
 
   if (state.columns.size === 0) {
     if (isStartup && window.electronAPI) {
@@ -4396,7 +4397,10 @@ if (window.electronAPI && window.electronAPI.getHookServerPort) {
 // Init
 // ============================================================
 
-btnAdd.addEventListener('click', function () { addColumn(); });
+btnAdd.addEventListener('click', function () {
+  var args = buildSpawnArgs();
+  addColumn(args.length > 0 ? args : null);
+});
 btnAddRow.addEventListener('click', addRow);
 btnToggleSidebar.addEventListener('click', toggleSidebar);
 themeSelect.addEventListener('change', function () {
@@ -4467,22 +4471,84 @@ function buildSpawnArgs() {
   return args;
 }
 
+function updateSpawnButtonLabel() {
+  var tags = [];
+  if (optModel.value) tags.push(optModel.value);
+  if (optSkipPermissions.checked) tags.push('yolo');
+  if (optRemoteControl.checked) tags.push('remote');
+  if (optBare.checked) tags.push('bare');
+  if (optWorktree.value.trim()) tags.push('worktree');
+  if (optCustomArgs.value.trim()) tags.push('custom');
+
+  if (tags.length > 0) {
+    btnAdd.textContent = '+ Spawn \u00b7 ' + tags.join(' \u00b7 ');
+    btnAdd.classList.add('has-options');
+    btnAddOptions.classList.add('has-options');
+  } else {
+    btnAdd.textContent = '+ Spawn Claude';
+    btnAdd.classList.remove('has-options');
+    btnAddOptions.classList.remove('has-options');
+  }
+}
+
+function saveSpawnOptions() {
+  if (config.activeProjectIndex == null || !config.projects[config.activeProjectIndex]) return;
+  config.projects[config.activeProjectIndex].spawnOptions = {
+    skipPermissions: optSkipPermissions.checked,
+    remoteControl: optRemoteControl.checked,
+    bare: optBare.checked,
+    model: optModel.value,
+    worktree: optWorktree.value,
+    customArgs: optCustomArgs.value
+  };
+  saveConfig();
+}
+
+function loadSpawnOptions() {
+  var opts = {};
+  if (config.activeProjectIndex != null && config.projects[config.activeProjectIndex]) {
+    opts = config.projects[config.activeProjectIndex].spawnOptions || {};
+  }
+  optSkipPermissions.checked = !!opts.skipPermissions;
+  optRemoteControl.checked = !!opts.remoteControl;
+  optBare.checked = !!opts.bare;
+  optModel.value = opts.model || '';
+  optWorktree.value = opts.worktree || '';
+  optCustomArgs.value = opts.customArgs || '';
+  updateSpawnButtonLabel();
+}
+
 btnAddOptions.addEventListener('click', function (e) {
   e.stopPropagation();
   toggleSpawnDropdown();
 });
 
-btnSpawnWithOpts.addEventListener('click', function () {
-  var args = buildSpawnArgs();
-  closeSpawnDropdown();
-  addColumn(args.length > 0 ? args : null);
+// Update button label and persist when any option changes
+function onSpawnOptionChanged() { updateSpawnButtonLabel(); saveSpawnOptions(); }
+optSkipPermissions.addEventListener('change', onSpawnOptionChanged);
+optRemoteControl.addEventListener('change', onSpawnOptionChanged);
+optBare.addEventListener('change', onSpawnOptionChanged);
+optModel.addEventListener('change', onSpawnOptionChanged);
+optWorktree.addEventListener('input', onSpawnOptionChanged);
+optCustomArgs.addEventListener('input', onSpawnOptionChanged);
+
+// Prevent model select interactions from closing the spawn dropdown
+optModel.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+optModel.addEventListener('click', function (e) { e.stopPropagation(); });
+
+// Keep spawn dropdown open while model select is focused
+var modelSelectOpen = false;
+optModel.addEventListener('focus', function () { modelSelectOpen = true; });
+optModel.addEventListener('blur', function () {
+  modelSelectOpen = false;
 });
 
 // Close dropdown when clicking outside
 document.addEventListener('click', function (e) {
   if (!spawnDropdown.classList.contains('hidden') &&
       !spawnDropdown.contains(e.target) &&
-      e.target !== btnAddOptions) {
+      e.target !== btnAddOptions &&
+      !modelSelectOpen) {
     closeSpawnDropdown();
   }
 });
@@ -5936,7 +6002,7 @@ function refreshLoopsFlyout() {
           '<div class="loops-flyout-row-expanded">' +
             '<div class="loops-flyout-row-summary">Loading...</div>' +
             '<div class="loops-flyout-history"></div>' +
-            '<button class="loops-flyout-action-btn" disabled>Open Live (Coming soon)</button>' +
+            '<button class="loops-flyout-action-btn loops-flyout-open-claude">Open in Claude</button>' +
           '</div>';
 
         row.addEventListener('click', function () {
@@ -5987,6 +6053,26 @@ function refreshLoopsFlyout() {
           }
         });
 
+        // "Open in Claude" button in flyout row
+        row.querySelector('.loops-flyout-open-claude').addEventListener('click', function (e) {
+          e.stopPropagation();
+          window.electronAPI.getLoopHistory(loop.id, 1).then(function (history) {
+            if (history.length === 0) {
+              alert('No output to continue with.');
+              return;
+            }
+            var latest = history[0];
+            var output = latest.output || latest.summary || 'No output available';
+            var context = 'You are continuing work from a background loop called "' + loop.name + '". ' +
+              'Below is the output from the most recent run. The user wants to discuss, investigate, or action these findings.\n\n' +
+              '--- LOOP OUTPUT ---\n' + output + '\n--- END LOOP OUTPUT ---';
+            var spawnArgs = buildSpawnArgs();
+            spawnArgs.push('--append-system-prompt', context);
+            addColumn(spawnArgs, null, { title: loop.name });
+            toggleLoopsFlyout();
+          });
+        });
+
         listEl.appendChild(row);
       });
     });
@@ -6009,6 +6095,7 @@ window.electronAPI.onLoopRunStarted(function (data) {
   refreshLoops();
   refreshLoopsFlyout();
   updateLoopsTabIndicator();
+  updateLoopSidebarBadges();
   // If we're viewing this loop's detail, refresh it
   if (activeLoopDetailId === data.loopId) {
     window.electronAPI.getLoopsForProject(activeProjectKey).then(function (loops) {
@@ -6075,9 +6162,13 @@ function updateLoopsTabIndicator() {
 function updateLoopSidebarBadges() {
   window.electronAPI.getLoops().then(function (data) {
     var projectsWithAttention = new Set();
+    var anyRunning = false;
     data.loops.forEach(function (loop) {
       if (loop.lastRunStatus === 'error' || loop.lastError) {
         projectsWithAttention.add(loop.projectPath.replace(/\\/g, '/'));
+      }
+      if (loop.currentRunStartedAt) {
+        anyRunning = true;
       }
     });
 
@@ -6102,6 +6193,13 @@ function updateLoopSidebarBadges() {
 
     var flyoutBtn = document.getElementById('btn-loops-flyout');
     if (flyoutBtn) {
+      // Running state: green pulse animation
+      if (anyRunning) {
+        flyoutBtn.classList.add('has-running');
+      } else {
+        flyoutBtn.classList.remove('has-running');
+      }
+      // Attention state: static orange (no animation)
       if (projectsWithAttention.size > 0) {
         flyoutBtn.classList.add('has-attention');
       } else {
@@ -6132,7 +6230,9 @@ document.getElementById('btn-loop-open-claude').addEventListener('click', functi
     'Below is the output from the most recent run. The user wants to discuss, investigate, or action these findings.\n\n' +
     '--- LOOP OUTPUT ---\n' + output + '\n--- END LOOP OUTPUT ---';
 
-  addColumn(['--append-system-prompt', context], null, { title: loopName });
+  var spawnArgs = buildSpawnArgs();
+  spawnArgs.push('--append-system-prompt', context);
+  addColumn(spawnArgs, null, { title: loopName });
 });
 
 document.getElementById('btn-loop-copy-output').addEventListener('click', function () {

@@ -42,19 +42,21 @@
       "pty-server.js",
       "icon.ico",
       "icon.png",
+      "icon-tray.ico",
+      "icon-tray.png",
       "claude-icon.png",
       "claude-small.png",
       "node_modules/**/*"
     ],
     "win": {
       "target": "nsis",
-      "icon": "icon.ico"
+      "icon": "icon-tray.ico"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "installerIcon": "icon.ico",
-      "uninstallerIcon": "icon.ico",
+      "installerIcon": "icon-tray.ico",
+      "uninstallerIcon": "icon-tray.ico",
       "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "publish": {

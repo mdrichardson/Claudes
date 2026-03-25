@@ -495,6 +495,16 @@ html, body {
   color: var(--text-bright);
 }
 
+.spawn-split-btn #btn-add.has-options {
+  background: rgba(99, 102, 241, 0.15);
+  border-color: var(--accent);
+}
+
+.spawn-chevron.has-options {
+  background: rgba(99, 102, 241, 0.15);
+  border-color: var(--accent);
+}
+
 .spawn-dropdown {
   position: absolute;
   top: 100%;
@@ -584,23 +594,12 @@ html, body {
   margin: 4px 0;
 }
 
-.spawn-go-btn {
-  display: block;
-  width: calc(100% - 16px);
-  margin: 4px 8px;
-  padding: 5px 12px;
-  background: var(--bg-button);
-  color: var(--text-primary);
-  border: 1px solid var(--accent);
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 12px;
+.spawn-hint {
+  padding: 4px 12px 6px;
+  font-size: 10px;
+  color: var(--text-dim);
   text-align: center;
-}
-
-.spawn-go-btn:hover {
-  background: var(--accent);
-  color: var(--text-bright);
+  font-style: italic;
 }
 
 /* --- Column Layout --- */
@@ -4000,7 +3999,11 @@ html, body {
 
 #btn-loops-flyout.has-attention {
   color: #f5a623;
-  animation: pulse-attention 1.2s ease-in-out infinite;
+}
+
+#btn-loops-flyout.has-running {
+  color: #22c55e;
+  animation: pulse-working 1.5s ease-in-out infinite;
 }
 
 /* Sidebar loop attention badge */
@@ -4011,7 +4014,6 @@ html, body {
   border-radius: 50%;
   background: #f5a623;
   margin-left: 4px;
-  animation: pulse-attention 1.2s ease-in-out infinite;
 }
 
 .loops-placeholder p {
