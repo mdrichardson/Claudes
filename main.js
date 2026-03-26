@@ -114,7 +114,8 @@ function generateLoopId() {
 
 function findSystemNode() {
   try {
-    const result = execFileSync('where', ['node'], { encoding: 'utf8' });
+    const cmd = process.platform === 'win32' ? 'where' : 'which';
+    const result = execFileSync(cmd, ['node'], { encoding: 'utf8' });
     return result.trim().split(/\r?\n/)[0];
   } catch {
     return 'node';
@@ -178,7 +179,7 @@ function createWindow() {
     minWidth: 600,
     minHeight: 400,
     title: 'Claudes',
-    icon: path.join(__dirname, 'icon-tray.ico'),
+    icon: path.join(__dirname, process.platform === 'win32' ? 'icon-tray.ico' : 'icon.png'),
     backgroundColor: isLight ? '#ffffff' : '#1a1a2e',
     titleBarStyle: 'hidden',
     titleBarOverlay: {

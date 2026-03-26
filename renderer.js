@@ -646,7 +646,8 @@ function setActiveProject(index, isStartup) {
     if (isStartup && window.electronAPI) {
       restoreProjectSessions(newKey, project);
     } else {
-      addColumn();
+      var spawnArgs = buildSpawnArgs();
+      addColumn(spawnArgs.length > 0 ? spawnArgs : null);
     }
   } else {
     if (state.focusedColumnId !== null) {
@@ -658,16 +659,17 @@ function setActiveProject(index, isStartup) {
 
 function restoreProjectSessions(projectPath, project) {
   window.electronAPI.loadSessions(projectPath).then(function (savedSessions) {
+    var spawnArgs = buildSpawnArgs();
     if (savedSessions && savedSessions.length > 0) {
       for (var i = 0; i < savedSessions.length; i++) {
         // Support both old format (plain string) and new format ({sessionId, title})
         var entry = savedSessions[i];
         var sessionId = typeof entry === 'string' ? entry : entry.sessionId;
         var title = typeof entry === 'object' ? entry.title : null;
-        addColumn(['--resume', sessionId], null, title ? { title: title } : {});
+        addColumn(spawnArgs.concat(['--resume', sessionId]), null, title ? { title: title } : {});
       }
     } else {
-      addColumn();
+      addColumn(spawnArgs.length > 0 ? spawnArgs : null);
     }
   });
 }
