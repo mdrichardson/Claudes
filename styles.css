@@ -3968,6 +3968,66 @@ html, body {
   font-size: 12px;
 }
 
+.loop-time-add-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.loop-btn-add-time {
+  background: #6366f1;
+  border: none;
+  color: #fff;
+  width: 26px;
+  height: 26px;
+  border-radius: 4px;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.loop-btn-add-time:hover {
+  background: #4f46e5;
+}
+
+.loop-times-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  min-height: 24px;
+}
+
+.loop-time-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #6366f1;
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: monospace;
+}
+
+.loop-time-chip-remove {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.7);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.loop-time-chip-remove:hover {
+  color: #fff;
+}
+
 .loop-days-row {
   display: flex;
   gap: 6px;

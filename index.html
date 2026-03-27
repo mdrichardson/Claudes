@@ -344,7 +344,7 @@
             <div class="loop-schedule-row">
               <select id="loop-schedule-type">
                 <option value="interval">Every</option>
-                <option value="time_of_day">Daily at</option>
+                <option value="time_of_day">At specific times</option>
               </select>
               <div id="loop-interval-fields">
                 <input type="number" id="loop-interval-value" min="1" value="60" style="width:60px">
@@ -354,7 +354,11 @@
                 </select>
               </div>
               <div id="loop-tod-fields" style="display:none;">
-                <input type="time" id="loop-tod-time" value="09:00">
+                <div class="loop-time-add-row">
+                  <input type="time" id="loop-tod-time" value="09:00">
+                  <button type="button" id="btn-loop-add-time" class="loop-btn-add-time" title="Add time">+</button>
+                </div>
+                <div id="loop-tod-times-list" class="loop-times-chips"></div>
                 <div class="loop-days-row" id="loop-tod-days">
                   <label><input type="checkbox" value="mon" checked> Mon</label>
                   <label><input type="checkbox" value="tue" checked> Tue</label>
@@ -365,6 +369,15 @@
                   <label><input type="checkbox" value="sun"> Sun</label>
                 </div>
               </div>
+            </div>
+          </div>
+          <div class="loop-form-group">
+            <label>Triggers</label>
+            <div class="loop-permissions">
+              <label class="loop-permission-option">
+                <input type="checkbox" id="loop-run-on-start">
+                <span>Run on app start</span>
+              </label>
             </div>
           </div>
           <div class="loop-form-group">

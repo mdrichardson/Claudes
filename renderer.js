@@ -5467,6 +5467,65 @@ function refreshLoops() {
   updateLoopsTabIndicator();
 }
 
+function formatTimeHHMM(h, m) {
+  return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+}
+
+function formatLoopScheduleText(loop) {
+  if (loop.schedule.type === 'interval') {
+    var mins = loop.schedule.minutes;
+    return mins >= 60 ? 'Every ' + (mins / 60) + 'h' : 'Every ' + mins + 'm';
+  }
+  // time_of_day with multiple times
+  var times = loop.schedule.times || [{ hour: loop.schedule.hour, minute: loop.schedule.minute || 0 }];
+  if (times.length === 1) {
+    return 'Daily ' + formatTimeHHMM(times[0].hour, times[0].minute);
+  }
+  var labels = times.map(function (t) { return formatTimeHHMM(t.hour, t.minute); });
+  return labels.join(', ');
+}
+
+function getNextScheduledTime(loop) {
+  var times = loop.schedule.times || [{ hour: loop.schedule.hour, minute: loop.schedule.minute || 0 }];
+  var now = new Date();
+  var nowMinutes = now.getHours() * 60 + now.getMinutes();
+  var dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+  var lastRun = loop.lastRunAt ? new Date(loop.lastRunAt) : null;
+
+  // Check remaining times today
+  var today = dayNames[now.getDay()];
+  var todayAllowed = !loop.schedule.days || loop.schedule.days.length === 0 || loop.schedule.days.indexOf(today) !== -1;
+  if (todayAllowed) {
+    for (var i = 0; i < times.length; i++) {
+      var sm = times[i].hour * 60 + times[i].minute;
+      if (sm > nowMinutes) {
+        var next = new Date(now);
+        next.setHours(times[i].hour, times[i].minute, 0, 0);
+        return next.getTime();
+      }
+      // If time has passed but hasn't run yet today for this slot
+      if (sm <= nowMinutes && lastRun) {
+        var lastRunMinutes = lastRun.getHours() * 60 + lastRun.getMinutes();
+        if (lastRun.toDateString() !== now.toDateString() || lastRunMinutes < sm) {
+          return Date.now(); // due now
+        }
+      }
+    }
+  }
+
+  // Find next allowed day
+  for (var d = 1; d <= 7; d++) {
+    var futureDate = new Date(now);
+    futureDate.setDate(futureDate.getDate() + d);
+    var futureDay = dayNames[futureDate.getDay()];
+    if (!loop.schedule.days || loop.schedule.days.length === 0 || loop.schedule.days.indexOf(futureDay) !== -1) {
+      futureDate.setHours(times[0].hour, times[0].minute, 0, 0);
+      return futureDate.getTime();
+    }
+  }
+  return null;
+}
+
 function renderLoopCards(loops, container) {
   container.innerHTML = '';
 
@@ -5502,16 +5561,8 @@ function renderLoopCards(loops, container) {
 
     card.classList.add(statusClass);
 
-    var schedText = '';
-    if (loop.schedule.type === 'interval') {
-      var mins = loop.schedule.minutes;
-      if (mins >= 60) schedText = 'Every ' + (mins / 60) + 'h';
-      else schedText = 'Every ' + mins + 'm';
-    } else {
-      var h = loop.schedule.hour;
-      var m = loop.schedule.minute || 0;
-      schedText = 'Daily ' + (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
-    }
+    var schedText = formatLoopScheduleText(loop);
+    if (loop.runOnStart) schedText += ' + on start';
 
     var lastRunText = '';
     if (loop.lastRunAt) {
@@ -5534,6 +5585,16 @@ function renderLoopCards(loops, container) {
         else nextRunText = 'Next: ' + Math.floor(nextMs / 3600000) + 'h';
       } else {
         nextRunText = 'Next: pending';
+      }
+    } else if (loop.enabled && loop.schedule.type === 'time_of_day') {
+      var nextTime = getNextScheduledTime(loop);
+      if (nextTime) {
+        var diff = nextTime - Date.now();
+        if (diff <= 0) nextRunText = 'Due now';
+        else if (diff < 60000) nextRunText = 'Next: <1m';
+        else if (diff < 3600000) nextRunText = 'Next: ' + Math.floor(diff / 60000) + 'm';
+        else if (diff < 86400000) nextRunText = 'Next: ' + Math.floor(diff / 3600000) + 'h';
+        else nextRunText = 'Next: ' + Math.floor(diff / 86400000) + 'd';
       }
     }
 
@@ -5651,14 +5712,8 @@ function openLoopDetail(loop) {
   }
 
   // Meta info
-  var schedText = '';
-  if (loop.schedule.type === 'interval') {
-    var mins = loop.schedule.minutes;
-    schedText = mins >= 60 ? 'Every ' + (mins / 60) + 'h' : 'Every ' + mins + 'm';
-  } else {
-    schedText = 'Daily ' + (loop.schedule.hour < 10 ? '0' : '') + loop.schedule.hour + ':' +
-      (loop.schedule.minute < 10 ? '0' : '') + (loop.schedule.minute || 0);
-  }
+  var schedText = formatLoopScheduleText(loop);
+  if (loop.runOnStart) schedText += ' + on start';
   var metaEl = document.getElementById('loop-detail-meta');
   metaEl.innerHTML = '<span>' + schedText + '</span>' +
     (loop.lastRunAt ? '<span>Last: ' + new Date(loop.lastRunAt).toLocaleTimeString() + '</span>' : '<span>Never run</span>') +
@@ -5796,6 +5851,8 @@ document.getElementById('loop-detail-run-select').addEventListener('change', fun
 
 var loopEditingId = null;
 
+var loopModalTimes = []; // tracks scheduled times for the modal
+
 function openLoopModal(existingLoop) {
   loopEditingId = existingLoop ? existingLoop.id : null;
   document.getElementById('loop-modal-title').textContent = existingLoop ? 'Edit Loop' : 'New Loop';
@@ -5803,7 +5860,6 @@ function openLoopModal(existingLoop) {
 
   document.getElementById('loop-name').value = existingLoop ? existingLoop.name : '';
   document.getElementById('loop-prompt').value = existingLoop ? existingLoop.prompt : '';
-
 
   var schedType = existingLoop ? existingLoop.schedule.type : 'interval';
   document.getElementById('loop-schedule-type').value = schedType;
@@ -5823,16 +5879,24 @@ function openLoopModal(existingLoop) {
     document.getElementById('loop-interval-unit').value = 'minutes';
   }
 
+  // Multi-time support
+  loopModalTimes = [];
   if (existingLoop && existingLoop.schedule.type === 'time_of_day') {
-    var h = existingLoop.schedule.hour;
-    var m = existingLoop.schedule.minute || 0;
-    document.getElementById('loop-tod-time').value = (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+    if (existingLoop.schedule.times) {
+      loopModalTimes = existingLoop.schedule.times.slice();
+    } else if (existingLoop.schedule.hour !== undefined) {
+      // Legacy single-time format
+      loopModalTimes = [{ hour: existingLoop.schedule.hour, minute: existingLoop.schedule.minute || 0 }];
+    }
     var checkboxes = document.querySelectorAll('#loop-tod-days input[type="checkbox"]');
     checkboxes.forEach(function (cb) {
       cb.checked = existingLoop.schedule.days ? existingLoop.schedule.days.indexOf(cb.value) !== -1 : false;
     });
   }
+  document.getElementById('loop-tod-time').value = '09:00';
+  renderLoopTimeChips();
 
+  document.getElementById('loop-run-on-start').checked = existingLoop ? !!existingLoop.runOnStart : false;
   document.getElementById('loop-skip-permissions').checked = existingLoop ? !!existingLoop.skipPermissions : false;
   document.getElementById('loop-db-connection').value = existingLoop ? (existingLoop.dbConnectionString || '') : '';
   document.getElementById('loop-db-connection').type = 'password';
@@ -5841,6 +5905,45 @@ function openLoopModal(existingLoop) {
 
   document.getElementById('loop-modal-overlay').classList.remove('hidden');
   document.getElementById('loop-name').focus();
+}
+
+function addLoopTime() {
+  var timeVal = document.getElementById('loop-tod-time').value;
+  if (!timeVal) return;
+  var parts = timeVal.split(':');
+  var h = parseInt(parts[0]);
+  var m = parseInt(parts[1]);
+  // Avoid duplicates
+  var exists = loopModalTimes.some(function (t) { return t.hour === h && t.minute === m; });
+  if (exists) return;
+  loopModalTimes.push({ hour: h, minute: m });
+  // Sort chronologically
+  loopModalTimes.sort(function (a, b) { return (a.hour * 60 + a.minute) - (b.hour * 60 + b.minute); });
+  renderLoopTimeChips();
+}
+
+function removeLoopTime(index) {
+  loopModalTimes.splice(index, 1);
+  renderLoopTimeChips();
+}
+
+function renderLoopTimeChips() {
+  var container = document.getElementById('loop-tod-times-list');
+  container.innerHTML = '';
+  if (loopModalTimes.length === 0) {
+    container.innerHTML = '<span style="opacity:0.4;font-size:11px;">No times added yet — use the picker above</span>';
+    return;
+  }
+  loopModalTimes.forEach(function (t, i) {
+    var chip = document.createElement('span');
+    chip.className = 'loop-time-chip';
+    var label = (t.hour < 10 ? '0' : '') + t.hour + ':' + (t.minute < 10 ? '0' : '') + t.minute;
+    chip.innerHTML = label + '<button type="button" class="loop-time-chip-remove" title="Remove">&times;</button>';
+    chip.querySelector('.loop-time-chip-remove').addEventListener('click', function () {
+      removeLoopTime(i);
+    });
+    container.appendChild(chip);
+  });
 }
 
 function closeLoopModal() {
@@ -5866,22 +5969,23 @@ function saveLoop() {
     var unit = document.getElementById('loop-interval-unit').value;
     schedule = { type: 'interval', minutes: unit === 'hours' ? val * 60 : val };
   } else {
-    var timeParts = document.getElementById('loop-tod-time').value.split(':');
+    if (loopModalTimes.length === 0) { alert('Add at least one scheduled time.'); return; }
     var days = [];
     document.querySelectorAll('#loop-tod-days input:checked').forEach(function (cb) {
       days.push(cb.value);
     });
-    schedule = { type: 'time_of_day', hour: parseInt(timeParts[0]), minute: parseInt(timeParts[1]), days: days };
+    schedule = { type: 'time_of_day', times: loopModalTimes.slice(), days: days };
   }
 
+  var runOnStart = document.getElementById('loop-run-on-start').checked;
   var skipPermissions = document.getElementById('loop-skip-permissions').checked;
   var dbConnectionString = document.getElementById('loop-db-connection').value.trim() || null;
   var dbReadOnly = document.getElementById('loop-db-readonly').checked;
 
   if (loopEditingId) {
     window.electronAPI.updateLoop(loopEditingId, {
-      name: name, prompt: prompt, schedule: schedule, skipPermissions: skipPermissions,
-      dbConnectionString: dbConnectionString, dbReadOnly: dbReadOnly
+      name: name, prompt: prompt, schedule: schedule, runOnStart: runOnStart,
+      skipPermissions: skipPermissions, dbConnectionString: dbConnectionString, dbReadOnly: dbReadOnly
     }).then(function () {
       closeLoopModal();
       refreshLoops();
@@ -5890,8 +5994,8 @@ function saveLoop() {
   } else {
     window.electronAPI.createLoop({
       name: name, prompt: prompt, projectPath: activeProjectKey, schedule: schedule,
-      skipPermissions: skipPermissions, dbConnectionString: dbConnectionString,
-      dbReadOnly: dbReadOnly, createdBy: 'ui'
+      runOnStart: runOnStart, skipPermissions: skipPermissions,
+      dbConnectionString: dbConnectionString, dbReadOnly: dbReadOnly, createdBy: 'ui'
     }).then(function () {
       closeLoopModal();
       refreshLoops();
@@ -5902,6 +6006,11 @@ function saveLoop() {
 
 document.getElementById('loop-schedule-type').addEventListener('change', function () {
   toggleScheduleFields(this.value);
+});
+document.getElementById('btn-loop-add-time').addEventListener('click', addLoopTime);
+document.getElementById('loop-tod-time').addEventListener('keydown', function (e) {
+  e.stopPropagation();
+  if (e.key === 'Enter') { e.preventDefault(); addLoopTime(); }
 });
 // Prevent keyboard shortcuts from stealing input in loop modal
 ['loop-name', 'loop-prompt', 'loop-db-connection'].forEach(function (id) {

@@ -1052,7 +1052,7 @@ ipcMain.handle('loops:update', (event, loopId, updates) => {
   const data = readLoops();
   const loop = data.loops.find(l => l.id === loopId);
   if (!loop) return null;
-  const safeFields = ['name', 'prompt', 'schedule', 'enabled', 'skipPermissions', 'dbConnectionString', 'dbReadOnly'];
+  const safeFields = ['name', 'prompt', 'schedule', 'enabled', 'runOnStart', 'skipPermissions', 'dbConnectionString', 'dbReadOnly'];
   safeFields.forEach(field => {
     if (updates[field] !== undefined) loop[field] = updates[field];
   });
@@ -1186,13 +1186,23 @@ function shouldRunLoop(loop, now) {
     const today = dayNames[date.getDay()];
     if (loop.schedule.days && loop.schedule.days.indexOf(today) === -1) return false;
     const nowMinutes = date.getHours() * 60 + date.getMinutes();
-    const schedMinutes = loop.schedule.hour * 60 + (loop.schedule.minute || 0);
-    if (nowMinutes < schedMinutes) return false;
-    if (loop.lastRunAt) {
-      const lastRun = new Date(loop.lastRunAt);
-      if (lastRun.toDateString() === date.toDateString()) return false;
+
+    // Support multiple times (new format) or single time (legacy)
+    const times = loop.schedule.times || [{ hour: loop.schedule.hour, minute: loop.schedule.minute || 0 }];
+    const lastRun = loop.lastRunAt ? new Date(loop.lastRunAt) : null;
+
+    for (const t of times) {
+      const schedMinutes = t.hour * 60 + (t.minute || 0);
+      if (nowMinutes < schedMinutes) continue;
+      // Check we haven't already run for this time slot today
+      if (lastRun && lastRun.toDateString() === date.toDateString()) {
+        const lastRunMinutes = lastRun.getHours() * 60 + lastRun.getMinutes();
+        // If last run was after this slot's time, it's already been handled
+        if (lastRunMinutes >= schedMinutes) continue;
+      }
+      return true;
     }
-    return true;
+    return false;
   }
   return false;
 }
@@ -1433,6 +1443,17 @@ function startLoopScheduler() {
     }
   });
   if (changed) writeLoops(data);
+
+  // Run loops flagged with runOnStart
+  setTimeout(() => {
+    const startupData = readLoops();
+    if (!startupData.globalEnabled) return;
+    startupData.loops.forEach((loop) => {
+      if (loop.enabled && loop.runOnStart) {
+        runLoop(loop.id);
+      }
+    });
+  }, 5000); // slight delay to let the app fully initialize
 
   // Check every 30 seconds
   loopSchedulerTimer = setInterval(() => {
