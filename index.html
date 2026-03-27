@@ -219,6 +219,13 @@
       </div>
       <div class="modal-body settings-body">
         <div class="settings-section">
+          <h3 class="settings-section-title">General</h3>
+          <label class="settings-toggle">
+            <input type="checkbox" id="setting-start-with-os">
+            <span>Start with OS (launches minimised to tray)</span>
+          </label>
+        </div>
+        <div class="settings-section">
           <h3 class="settings-section-title">Notifications</h3>
           <label class="settings-toggle">
             <input type="checkbox" id="setting-notif-taskbar" checked>
@@ -355,6 +362,7 @@
             <label>Schedule</label>
             <div class="loop-schedule-row">
               <select id="loop-schedule-type">
+                <option value="manual">Manual</option>
                 <option value="interval">Every</option>
                 <option value="time_of_day">At specific times</option>
                 <option value="app_startup">On app startup</option>

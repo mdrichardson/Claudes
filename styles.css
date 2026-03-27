@@ -3481,6 +3481,27 @@ html, body {
 .loop-card.loop-error { border-left-color: #ef4444; }
 .loop-card.loop-disabled { opacity: 0.5; }
 
+.loop-section-separator {
+  display: flex;
+  align-items: center;
+  margin: 10px 0 6px 0;
+  gap: 8px;
+}
+.loop-section-separator::before,
+.loop-section-separator::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--text-faint);
+  opacity: 0.3;
+}
+.loop-section-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
 .loop-card-header {
   display: flex;
   justify-content: space-between;

@@ -329,6 +329,20 @@ function saveNotifSettings() {
   saveConfig();
 }
 
+function loadStartWithOS() {
+  if (!window.electronAPI || !window.electronAPI.getStartWithOS) return;
+  window.electronAPI.getStartWithOS().then(function (enabled) {
+    var el = document.getElementById('setting-start-with-os');
+    if (el) el.checked = !!enabled;
+  });
+}
+
+function saveStartWithOS() {
+  if (!window.electronAPI || !window.electronAPI.setStartWithOS) return;
+  var enabled = document.getElementById('setting-start-with-os').checked;
+  window.electronAPI.setStartWithOS(enabled);
+}
+
 function notifyAttentionNeeded(columnId) {
   var col = allColumns.get(columnId);
   if (!col) return;
@@ -4637,6 +4651,7 @@ var settingsModal = document.getElementById('settings-modal');
 
 document.getElementById('btn-settings').addEventListener('click', function () {
   loadNotifSettings();
+  loadStartWithOS();
   settingsModal.classList.remove('hidden');
 });
 
@@ -4651,6 +4666,7 @@ settingsModal.addEventListener('click', function (e) {
 document.getElementById('setting-notif-taskbar').addEventListener('change', saveNotifSettings);
 document.getElementById('setting-notif-sidebar').addEventListener('change', saveNotifSettings);
 document.getElementById('setting-notif-header').addEventListener('change', saveNotifSettings);
+document.getElementById('setting-start-with-os').addEventListener('change', saveStartWithOS);
 
 btnClaudeMd.addEventListener('click', openClaudeMdModal);
 
@@ -5481,6 +5497,9 @@ function formatTimeHHMM(h, m) {
 }
 
 function formatLoopScheduleText(loop) {
+  if (loop.schedule.type === 'manual') {
+    return 'Manual';
+  }
   if (loop.schedule.type === 'interval') {
     var mins = loop.schedule.minutes;
     return mins >= 60 ? 'Every ' + (mins / 60) + 'h' : 'Every ' + mins + 'm';
@@ -5546,7 +5565,22 @@ function renderLoopCards(loops, container) {
     return;
   }
 
-  loops.forEach(function (loop) {
+  // Split manual loops to the top, automatic loops below
+  var manualLoops = loops.filter(function (l) { return l.schedule.type === 'manual'; });
+  var autoLoops = loops.filter(function (l) { return l.schedule.type !== 'manual'; });
+
+  var sortedLoops = manualLoops.concat(autoLoops);
+  var needsSeparator = manualLoops.length > 0 && autoLoops.length > 0;
+  var separatorIndex = manualLoops.length;
+
+  sortedLoops.forEach(function (loop, index) {
+    // Insert separator between manual and automatic sections
+    if (needsSeparator && index === separatorIndex) {
+      var sep = document.createElement('div');
+      sep.className = 'loop-section-separator';
+      sep.innerHTML = '<span class="loop-section-label">Scheduled</span>';
+      container.appendChild(sep);
+    }
     var card = document.createElement('div');
     card.className = 'loop-card';
 
@@ -5588,7 +5622,9 @@ function renderLoopCards(loops, container) {
     }
 
     var nextRunText = '';
-    if (loop.enabled && loop.schedule.type === 'app_startup') {
+    if (loop.enabled && loop.schedule.type === 'manual') {
+      nextRunText = '';
+    } else if (loop.enabled && loop.schedule.type === 'app_startup') {
       nextRunText = 'Next: app restart';
     } else if (loop.enabled && loop.schedule.type === 'interval') {
       if (loop.lastRunAt) {
@@ -5976,6 +6012,7 @@ function toggleScheduleFields(type) {
   document.getElementById('loop-interval-fields').style.display = type === 'interval' ? '' : 'none';
   document.getElementById('loop-tod-fields').style.display = type === 'time_of_day' ? '' : 'none';
   document.getElementById('loop-startup-fields').style.display = type === 'app_startup' ? '' : 'none';
+  // Manual type has no schedule fields
 }
 
 function saveLoop() {
@@ -5986,7 +6023,9 @@ function saveLoop() {
 
   var schedType = document.getElementById('loop-schedule-type').value;
   var schedule;
-  if (schedType === 'interval') {
+  if (schedType === 'manual') {
+    schedule = { type: 'manual' };
+  } else if (schedType === 'interval') {
     var val = parseInt(document.getElementById('loop-interval-value').value) || 60;
     var unit = document.getElementById('loop-interval-unit').value;
     schedule = { type: 'interval', minutes: unit === 'hours' ? val * 60 : val };

@@ -171,15 +171,24 @@ function startPtyServer() {
 
 // --- Window ---
 
+function wasLaunchedAtLogin() {
+  if (process.platform === 'darwin') {
+    return app.getLoginItemSettings().wasOpenedAtLogin;
+  }
+  return process.argv.includes('--hidden');
+}
+
 function createWindow() {
   const config = readConfig();
   const isLight = config.theme === 'auto' ? !nativeTheme.shouldUseDarkColors : config.theme === 'light';
+  const startHidden = wasLaunchedAtLogin();
 
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 600,
     minHeight: 400,
+    show: !startHidden,
     title: 'Claudes',
     icon: path.join(__dirname, process.platform === 'win32' ? 'icon-tray.ico' : 'icon.png'),
     backgroundColor: isLight ? '#ffffff' : '#1a1a2e',
@@ -197,6 +206,10 @@ function createWindow() {
   });
 
   mainWindow.loadFile('index.html');
+
+  if (startHidden && process.platform === 'darwin') {
+    app.dock.hide();
+  }
 
   mainWindow.on('close', (event) => {
     if (!isQuitting) {
@@ -229,6 +242,25 @@ ipcMain.handle('config:getProjects', () => {
 
 ipcMain.handle('config:saveProjects', (event, config) => {
   writeConfig(config);
+});
+
+ipcMain.handle('app:getStartWithOS', () => {
+  const settings = app.getLoginItemSettings();
+  return settings.openAtLogin;
+});
+
+ipcMain.handle('app:setStartWithOS', (event, enabled) => {
+  if (process.platform === 'darwin') {
+    app.setLoginItemSettings({
+      openAtLogin: enabled,
+      openAsHidden: true
+    });
+  } else {
+    app.setLoginItemSettings({
+      openAtLogin: enabled,
+      args: enabled ? ['--hidden'] : []
+    });
+  }
 });
 
 ipcMain.handle('theme:setTitleBarOverlay', (event, colors) => {
@@ -1250,6 +1282,7 @@ function shouldRunLoop(loop, now) {
   if (!loop.enabled) return false;
   if (loop.currentRunStartedAt) return false;
   if (loop.schedule.type === 'app_startup') return false; // only triggered on app start
+  if (loop.schedule.type === 'manual') return false; // only triggered manually
 
   if (loop.schedule.type === 'interval') {
     if (!loop.lastRunAt) return true;
