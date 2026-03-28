@@ -1854,6 +1854,13 @@ ipcMain.handle('automations:import', (event, projectPath) => {
   }
 });
 
+ipcMain.handle('automations:validateDependencies', (event, agents) => {
+  if (hasCyclicDependencies(agents)) {
+    return { valid: false, error: 'Circular dependency detected in agent run-after chain' };
+  }
+  return { valid: true };
+});
+
 // --- Loop Scheduler & Execution ---
 
 const runningLoops = new Map(); // loopId -> child process
@@ -2443,6 +2450,82 @@ async function runAgent(automationId, agentId) {
       runAgent(next.automationId, next.agentId);
     }
   });
+}
+
+function triggerDependentAgents(automationId, completedAgentId, completedStatus, data) {
+  const automation = data ? data.automations.find(a => a.id === automationId) : null;
+  if (!automation) return;
+
+  automation.agents.forEach(agent => {
+    if (agent.runMode !== 'run_after') return;
+    if (!agent.enabled) return;
+    if (!agent.runAfter || !agent.runAfter.includes(completedAgentId)) return;
+
+    // Check if ALL upstream agents have completed
+    const allUpstreamDone = agent.runAfter.every(upstreamId => {
+      const upstream = automation.agents.find(ag => ag.id === upstreamId);
+      if (!upstream) return true; // Missing upstream treated as complete
+      return upstream.lastRunStatus && !upstream.currentRunStartedAt;
+    });
+
+    if (!allUpstreamDone) return;
+
+    // Check if any upstream failed
+    const anyFailed = agent.runAfter.some(upstreamId => {
+      const upstream = automation.agents.find(ag => ag.id === upstreamId);
+      return upstream && (upstream.lastRunStatus === 'error' || upstream.lastRunStatus === 'skipped');
+    });
+
+    if (anyFailed && !agent.runOnUpstreamFailure) {
+      // Skip this agent and cascade the skip
+      const freshData = readAutomations();
+      const freshAuto = freshData.automations.find(a => a.id === automationId);
+      if (freshAuto) {
+        const freshAgent = freshAuto.agents.find(ag => ag.id === agent.id);
+        if (freshAgent) {
+          freshAgent.lastRunStatus = 'skipped';
+          freshAgent.lastError = 'Upstream agent failed or was skipped';
+          writeAutomations(freshData);
+        }
+        // Cascade skip to agents depending on this one
+        triggerDependentAgents(automationId, agent.id, 'skipped', freshData);
+      }
+      if (mainWindow) mainWindow.webContents.send('automations:agent-completed', {
+        automationId, agentId: agent.id, status: 'skipped'
+      });
+      return;
+    }
+
+    // All upstream done and either all succeeded or runOnUpstreamFailure is true
+    runAgent(automationId, agent.id);
+  });
+}
+
+function hasCyclicDependencies(agents) {
+  const visited = new Set();
+  const inStack = new Set();
+
+  function dfs(agentId) {
+    if (inStack.has(agentId)) return true; // Cycle found
+    if (visited.has(agentId)) return false;
+    visited.add(agentId);
+    inStack.add(agentId);
+
+    const agent = agents.find(ag => ag.id === agentId);
+    if (agent && agent.runAfter) {
+      for (const upstreamId of agent.runAfter) {
+        if (dfs(upstreamId)) return true;
+      }
+    }
+
+    inStack.delete(agentId);
+    return false;
+  }
+
+  for (const agent of agents) {
+    if (dfs(agent.id)) return true;
+  }
+  return false;
 }
 
 let loopSchedulerTimer = null;
