@@ -1914,6 +1914,42 @@ function parseLoopResult(output) {
   return result;
 }
 
+function shouldRunAgent(agent, now) {
+  if (!agent.enabled) return false;
+  if (agent.currentRunStartedAt) return false;
+  if (agent.runMode === 'run_after') return false; // Only triggered by upstream completion
+  if (agent.schedule.type === 'app_startup') return false;
+  if (agent.schedule.type === 'manual') return false;
+
+  if (agent.schedule.type === 'interval') {
+    if (!agent.lastRunAt) return true;
+    const elapsed = now - new Date(agent.lastRunAt).getTime();
+    return elapsed >= agent.schedule.minutes * 60000;
+  }
+
+  if (agent.schedule.type === 'time_of_day') {
+    const date = new Date(now);
+    const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+    const today = dayNames[date.getDay()];
+    if (agent.schedule.days && agent.schedule.days.indexOf(today) === -1) return false;
+    const nowMinutes = date.getHours() * 60 + date.getMinutes();
+    const times = agent.schedule.times || [{ hour: agent.schedule.hour, minute: agent.schedule.minute || 0 }];
+    const lastRun = agent.lastRunAt ? new Date(agent.lastRunAt) : null;
+
+    for (const t of times) {
+      const schedMinutes = t.hour * 60 + (t.minute || 0);
+      if (nowMinutes < schedMinutes) continue;
+      if (lastRun && lastRun.toDateString() === date.toDateString()) {
+        const lastRunMinutes = lastRun.getHours() * 60 + lastRun.getMinutes();
+        if (lastRunMinutes >= schedMinutes) continue;
+      }
+      return true;
+    }
+    return false;
+  }
+  return false;
+}
+
 function shouldRunLoop(loop, now) {
   if (!loop.enabled) return false;
   if (loop.currentRunStartedAt) return false;
@@ -2530,70 +2566,107 @@ function hasCyclicDependencies(agents) {
 
 let loopSchedulerTimer = null;
 
-function startLoopScheduler() {
-  // Startup recovery: clear stale "running" states
-  const data = readLoops();
+function startAutomationScheduler() {
+  // Startup recovery: clear stale "running" states in automations
+  const data = readAutomations();
   let changed = false;
-  data.loops.forEach((loop) => {
-    if (loop.currentRunStartedAt) {
-      loop.currentRunStartedAt = null;
-      loop.lastRunStatus = 'interrupted';
-      loop.lastError = 'App closed during run';
-      changed = true;
-    }
+  data.automations.forEach(automation => {
+    automation.agents.forEach(agent => {
+      if (agent.currentRunStartedAt) {
+        agent.currentRunStartedAt = null;
+        agent.lastRunStatus = 'interrupted';
+        agent.lastError = 'App closed during run';
+        changed = true;
+      }
+    });
   });
-  if (changed) writeLoops(data);
+  if (changed) writeAutomations(data);
 
-  // Run loops scheduled as app_startup
+  // Also clean up legacy loop states
+  if (fs.existsSync(LOOPS_FILE)) {
+    try {
+      const loopData = JSON.parse(fs.readFileSync(LOOPS_FILE, 'utf8'));
+      let loopChanged = false;
+      (loopData.loops || []).forEach(loop => {
+        if (loop.currentRunStartedAt) {
+          loop.currentRunStartedAt = null;
+          loop.lastRunStatus = 'interrupted';
+          loopChanged = true;
+        }
+      });
+      if (loopChanged) fs.writeFileSync(LOOPS_FILE, JSON.stringify(loopData, null, 2), 'utf8');
+    } catch { /* ignore */ }
+  }
+
+  // Run agents scheduled as app_startup
   setTimeout(() => {
-    const startupData = readLoops();
+    const startupData = readAutomations();
     if (!startupData.globalEnabled) return;
     const todayStr = new Date().toDateString();
-    startupData.loops.forEach((loop) => {
-      if (!loop.enabled) return;
-      if (!loop.schedule || loop.schedule.type !== 'app_startup') return;
+    startupData.automations.forEach(automation => {
+      if (!automation.enabled) return;
+      automation.agents.forEach(agent => {
+        if (!agent.enabled) return;
+        if (agent.runMode === 'run_after') return;
+        if (!agent.schedule || agent.schedule.type !== 'app_startup') return;
 
-      if (loop.firstStartOnly && loop.lastRunAt) {
-        const lastRunDate = new Date(loop.lastRunAt).toDateString();
-        if (lastRunDate === todayStr) return; // already ran today
-      }
-      runLoop(loop.id);
+        if (agent.firstStartOnly && agent.lastRunAt) {
+          const lastRunDate = new Date(agent.lastRunAt).toDateString();
+          if (lastRunDate === todayStr) return;
+        }
+        runAgent(automation.id, agent.id);
+      });
     });
-  }, 5000); // slight delay to let the app fully initialize
+  }, 5000);
 
   // Check every 30 seconds
   loopSchedulerTimer = setInterval(() => {
-    const loopData = readLoops();
-    if (!loopData.globalEnabled) return;
+    const autoData = readAutomations();
+    if (!autoData.globalEnabled) return;
     const now = Date.now();
-    loopData.loops.forEach((loop) => {
-      if (shouldRunLoop(loop, now)) {
-        runLoop(loop.id);
-      }
+    autoData.automations.forEach(automation => {
+      if (!automation.enabled) return;
+      automation.agents.forEach(agent => {
+        if (shouldRunAgent(agent, now)) {
+          runAgent(automation.id, agent.id);
+        }
+      });
     });
   }, 30000);
 }
 
-function stopLoopScheduler() {
+function stopAutomationScheduler() {
   if (loopSchedulerTimer) {
     clearInterval(loopSchedulerTimer);
     loopSchedulerTimer = null;
   }
+
+  // Kill running agents
+  runningAgents.forEach((child) => {
+    try { child.kill(); } catch { /* ignore */ }
+  });
+  runningAgents.clear();
+
+  // Kill running loops (legacy)
   runningLoops.forEach((child) => {
     try { child.kill(); } catch { /* ignore */ }
   });
   runningLoops.clear();
-  const data = readLoops();
+
+  // Mark all running agents as interrupted
+  const data = readAutomations();
   let changed = false;
-  data.loops.forEach((loop) => {
-    if (loop.currentRunStartedAt) {
-      loop.currentRunStartedAt = null;
-      loop.lastRunStatus = 'interrupted';
-      loop.lastError = 'App closed during run';
-      changed = true;
-    }
+  data.automations.forEach(automation => {
+    automation.agents.forEach(agent => {
+      if (agent.currentRunStartedAt) {
+        agent.currentRunStartedAt = null;
+        agent.lastRunStatus = 'interrupted';
+        agent.lastError = 'App closed during run';
+        changed = true;
+      }
+    });
   });
-  if (changed) writeLoops(data);
+  if (changed) writeAutomations(data);
 }
 
 // --- Tray ---
@@ -2660,7 +2733,7 @@ if (!gotLock) {
     createWindow();
     setupAutoUpdater();
     migrateLoopsToAutomations();
-    startLoopScheduler();
+    startAutomationScheduler();
   });
 
   app.on('activate', () => {
@@ -2677,7 +2750,7 @@ if (!gotLock) {
 app.on('window-all-closed', () => {
   // On close-to-tray, windows are hidden not closed, so this only fires on actual quit
   if (process.platform !== 'darwin') {
-    stopLoopScheduler();
+    stopAutomationScheduler();
     if (ptyServerProcess) {
       ptyServerProcess.kill();
     }
