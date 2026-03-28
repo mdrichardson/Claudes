@@ -5920,309 +5920,511 @@ document.getElementById('automation-detail-run-select').addEventListener('change
 });
 
 // ============================================================
-// Automation Modal (New / Edit)
+// Automation Modal (New / Edit) — Multi-Agent Support
 // ============================================================
 
 var automationEditingId = null;
-
-var automationModalTimes = []; // tracks scheduled times for the modal
+var modalAgents = []; // Tracks agent data for the modal
 
 function openAutomationModal(existingAutomation) {
   automationEditingId = existingAutomation ? existingAutomation.id : null;
-  document.getElementById('automation-modal-title').textContent = existingAutomation ? 'Edit Automation' : 'New Automation';
+  var title = existingAutomation ? 'Edit Automation' : 'New Automation';
+  document.getElementById('automation-modal-title').textContent = title;
   document.getElementById('btn-automation-save').textContent = existingAutomation ? 'Save Changes' : 'Create Automation';
+  document.getElementById('btn-automation-save').disabled = false;
+  document.getElementById('btn-automation-save').onclick = null;
 
-  document.getElementById('automation-name').value = existingAutomation ? existingAutomation.name : '';
-  document.getElementById('automation-prompt').value = existingAutomation ? existingAutomation.prompt : '';
+  // Hide setup panel, show form
+  document.getElementById('automation-setup-panel').style.display = 'none';
+  document.getElementById('automation-agents-list').style.display = '';
+  document.getElementById('automation-add-agent-row').style.display = '';
 
-  var schedType = existingAutomation ? existingAutomation.schedule.type : 'interval';
-  document.getElementById('automation-schedule-type').value = schedType;
-  toggleAgentScheduleFields(schedType);
-
-  if (existingAutomation && existingAutomation.schedule.type === 'interval') {
-    var mins = existingAutomation.schedule.minutes;
-    if (mins >= 60 && mins % 60 === 0) {
-      document.getElementById('automation-interval-value').value = mins / 60;
-      document.getElementById('automation-interval-unit').value = 'hours';
-    } else {
-      document.getElementById('automation-interval-value').value = mins;
-      document.getElementById('automation-interval-unit').value = 'minutes';
-    }
+  if (existingAutomation) {
+    modalAgents = existingAutomation.agents.map(function (ag) { return Object.assign({}, ag); });
   } else {
-    document.getElementById('automation-interval-value').value = 60;
-    document.getElementById('automation-interval-unit').value = 'minutes';
+    modalAgents = [{ name: '', prompt: '', schedule: { type: 'interval', minutes: 60 }, runMode: 'independent', runAfter: [], runOnUpstreamFailure: false, isolation: { enabled: false, clonePath: null }, skipPermissions: false, dbConnectionString: null, dbReadOnly: true, firstStartOnly: false }];
   }
 
-  // Multi-time support
-  automationModalTimes = [];
-  if (existingAutomation && existingAutomation.schedule.type === 'time_of_day') {
-    if (existingAutomation.schedule.times) {
-      automationModalTimes = existingAutomation.schedule.times.slice();
-    } else if (existingAutomation.schedule.hour !== undefined) {
-      // Legacy single-time format
-      automationModalTimes = [{ hour: existingAutomation.schedule.hour, minute: existingAutomation.schedule.minute || 0 }];
-    }
-    var checkboxes = document.querySelectorAll('#automation-tod-days input[type="checkbox"]');
-    checkboxes.forEach(function (cb) {
-      cb.checked = existingAutomation.schedule.days ? existingAutomation.schedule.days.indexOf(cb.value) !== -1 : false;
+  var isMulti = modalAgents.length > 1;
+  document.getElementById('automation-name-group').style.display = isMulti ? '' : 'none';
+  document.getElementById('automation-name').value = existingAutomation ? existingAutomation.name : '';
+
+  renderModalAgentCards();
+
+  document.getElementById('automation-modal-overlay').classList.remove('hidden');
+  var firstNameInput = document.querySelector('.agent-name');
+  if (firstNameInput) firstNameInput.focus();
+}
+
+function closeAutomationModal() {
+  document.getElementById('automation-modal-overlay').classList.add('hidden');
+  document.getElementById('automation-agents-list').style.display = '';
+  document.getElementById('automation-add-agent-row').style.display = '';
+  document.getElementById('automation-setup-panel').style.display = 'none';
+  document.getElementById('btn-automation-save').disabled = false;
+  document.getElementById('btn-automation-save').onclick = null;
+  automationEditingId = null;
+  modalAgents = [];
+}
+
+function renderModalAgentCards() {
+  var container = document.getElementById('automation-agents-list');
+  var isMulti = modalAgents.length > 1;
+  document.getElementById('automation-name-group').style.display = isMulti ? '' : 'none';
+  container.innerHTML = '';
+  modalAgents.forEach(function (agent, index) {
+    var html = createAgentCardHtml(index, agent, false, modalAgents);
+    var div = document.createElement('div');
+    div.innerHTML = html;
+    container.appendChild(div.firstElementChild);
+  });
+  container.querySelectorAll('.agent-card').forEach(function (card) {
+    var idx = parseInt(card.dataset.agentIndex);
+    bindAgentCardEvents(card, idx);
+  });
+}
+
+function createAgentCardHtml(agentIndex, agent, isCollapsed, allAgents) {
+  var isMulti = allAgents.length > 1;
+  var cardId = 'agent-card-' + agentIndex;
+  var name = agent ? (agent.name || '') : '';
+  var prompt = agent ? (agent.prompt || '') : '';
+  var schedType = agent && agent.schedule ? agent.schedule.type : 'interval';
+  var runMode = agent ? (agent.runMode || 'independent') : 'independent';
+
+  var header = '';
+  if (isMulti) {
+    var badges = '';
+    if (runMode === 'run_after') badges += '<span class="agent-badge agent-badge-chained">Chained</span>';
+    if (agent && agent.isolation && agent.isolation.enabled) badges += '<span class="agent-badge agent-badge-isolated">Isolated</span>';
+
+    header = '<div class="agent-card-header" data-agent-index="' + agentIndex + '">' +
+      '<span class="agent-card-collapse-icon">' + (isCollapsed ? '&#9654;' : '&#9660;') + '</span>' +
+      '<span class="agent-card-title">' + escapeHtml(name || 'Agent ' + (agentIndex + 1)) + '</span>' +
+      badges +
+      '<button type="button" class="agent-card-remove" data-agent-index="' + agentIndex + '" title="Remove agent">&times;</button>' +
+      '</div>';
+  }
+
+  var runAfterHtml = '';
+  if (isMulti) {
+    var otherAgents = allAgents.filter(function (_, i) { return i !== agentIndex; });
+    var chipOptions = otherAgents.map(function (ag) {
+      var originalIndex = allAgents.indexOf(ag);
+      var agId = ag.id || ('temp_' + originalIndex);
+      var selected = agent && agent.runAfter && agent.runAfter.indexOf(agId) !== -1;
+      return '<label class="agent-runafter-chip' + (selected ? ' selected' : '') + '">' +
+        '<input type="checkbox" value="' + originalIndex + '"' + (selected ? ' checked' : '') + '> ' +
+        escapeHtml(ag.name || 'Agent ' + (originalIndex + 1)) +
+        '</label>';
+    }).join('');
+
+    runAfterHtml = '<div class="automation-form-group agent-runafter-group" style="' + (runMode === 'run_after' ? '' : 'display:none;') + '">' +
+      '<label>Run after</label>' +
+      '<div class="agent-runafter-chips">' + chipOptions + '</div>' +
+      '</div>';
+  }
+
+  var isolationHtml = '';
+  if (isMulti) {
+    var isolationEnabled = agent && agent.isolation && agent.isolation.enabled;
+    isolationHtml = '<div class="automation-form-group">' +
+      '<label class="automation-permission-option">' +
+      '<input type="checkbox" class="agent-isolation-checkbox"' + (isolationEnabled ? ' checked' : '') + '>' +
+      '<span>Repo isolation <span class="automation-permission-hint">(clone into separate directory)</span></span>' +
+      '</label>' +
+      '</div>';
+  }
+
+  var scheduleDisplay = runMode === 'run_after' ? 'display:none;' : '';
+  var bodyStyle = isCollapsed ? 'display:none;' : '';
+
+  var intervalMins = agent && agent.schedule && agent.schedule.minutes ? agent.schedule.minutes : 60;
+  var intervalVal = intervalMins >= 60 && intervalMins % 60 === 0 ? intervalMins / 60 : intervalMins;
+  var intervalUnit = intervalMins >= 60 && intervalMins % 60 === 0 ? 'hours' : 'minutes';
+  var firstStartOnly = agent && agent.firstStartOnly;
+
+  var html = '<div class="agent-card" id="' + cardId + '" data-agent-index="' + agentIndex + '">' +
+    header +
+    '<div class="agent-card-body" style="' + bodyStyle + '">' +
+      '<div class="automation-form-group">' +
+        '<label>Name</label>' +
+        '<input type="text" class="automation-input agent-name" value="' + escapeHtml(name) + '" placeholder="e.g. Bug Resolution Agent" spellcheck="false">' +
+      '</div>' +
+      '<div class="automation-form-group">' +
+        '<label>Prompt</label>' +
+        '<textarea class="automation-textarea agent-prompt" rows="6" placeholder="What should Claude do each time this runs?" spellcheck="false">' + escapeHtml(prompt) + '</textarea>' +
+      '</div>' +
+      (isMulti ? '<div class="automation-form-group">' +
+        '<label>Run Mode</label>' +
+        '<select class="agent-run-mode">' +
+          '<option value="independent"' + (runMode === 'independent' ? ' selected' : '') + '>Independent (own schedule)</option>' +
+          '<option value="run_after"' + (runMode === 'run_after' ? ' selected' : '') + '>Run after (wait for other agents)</option>' +
+        '</select>' +
+      '</div>' : '') +
+      runAfterHtml +
+      isolationHtml +
+      '<div class="agent-schedule-section" style="' + scheduleDisplay + '">' +
+        '<div class="automation-form-group">' +
+          '<label>Schedule</label>' +
+          '<div class="automation-schedule-row">' +
+            '<select class="agent-schedule-type">' +
+              '<option value="manual"' + (schedType === 'manual' ? ' selected' : '') + '>Manual</option>' +
+              '<option value="interval"' + (schedType === 'interval' ? ' selected' : '') + '>Every</option>' +
+              '<option value="time_of_day"' + (schedType === 'time_of_day' ? ' selected' : '') + '>At specific times</option>' +
+              '<option value="app_startup"' + (schedType === 'app_startup' ? ' selected' : '') + '>On app startup</option>' +
+            '</select>' +
+            '<div class="agent-interval-fields" style="' + (schedType === 'interval' ? '' : 'display:none;') + '">' +
+              '<input type="number" class="agent-interval-value" min="1" value="' + intervalVal + '" style="width:60px">' +
+              '<select class="agent-interval-unit">' +
+                '<option value="minutes"' + (intervalUnit === 'minutes' ? ' selected' : '') + '>minutes</option>' +
+                '<option value="hours"' + (intervalUnit === 'hours' ? ' selected' : '') + '>hours</option>' +
+              '</select>' +
+            '</div>' +
+            '<div class="agent-startup-fields" style="' + (schedType === 'app_startup' ? '' : 'display:none;') + '">' +
+              '<label class="automation-permission-option" style="margin-top:4px;">' +
+                '<input type="checkbox" class="agent-first-start-only"' + (firstStartOnly ? ' checked' : '') + '>' +
+                '<span>Only on first start of the day</span>' +
+              '</label>' +
+            '</div>' +
+            '<div class="agent-tod-fields" style="' + (schedType === 'time_of_day' ? '' : 'display:none;') + '">' +
+              '<div class="automation-time-add-row">' +
+                '<input type="time" class="agent-tod-time" value="09:00">' +
+                '<button type="button" class="agent-btn-add-time" title="Add time">+</button>' +
+              '</div>' +
+              '<div class="agent-tod-times-list automation-times-chips"></div>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="automation-form-group">' +
+        '<label>Database <span class="automation-permission-hint">(optional)</span></label>' +
+        '<input type="password" class="automation-input agent-db-connection" value="' + escapeHtml(agent && agent.dbConnectionString ? agent.dbConnectionString : '') + '" placeholder="mongodb+srv://..." spellcheck="false" autocomplete="off">' +
+        '<div class="automation-permissions" style="margin-top:6px;">' +
+          '<label class="automation-permission-option"><input type="checkbox" class="agent-db-readonly"' + (agent && agent.dbReadOnly === false ? '' : ' checked') + '><span>Read-only</span></label>' +
+        '</div>' +
+      '</div>' +
+      '<div class="automation-form-group">' +
+        '<label>Permissions</label>' +
+        '<div class="automation-permissions">' +
+          '<label class="automation-permission-option"><input type="checkbox" class="agent-skip-permissions"' + (agent && agent.skipPermissions ? ' checked' : '') + '><span>Skip permissions</span></label>' +
+        '</div>' +
+      '</div>' +
+    '</div>' +
+    '</div>';
+
+  return html;
+}
+
+function bindAgentCardEvents(card, agentIndex) {
+  var header = card.querySelector('.agent-card-header');
+  if (header) {
+    header.addEventListener('click', function (e) {
+      if (e.target.classList.contains('agent-card-remove')) return;
+      var body = card.querySelector('.agent-card-body');
+      var icon = card.querySelector('.agent-card-collapse-icon');
+      if (body.style.display === 'none') {
+        body.style.display = '';
+        icon.innerHTML = '&#9660;';
+      } else {
+        syncAgentFromCard(card, agentIndex);
+        body.style.display = 'none';
+        icon.innerHTML = '&#9654;';
+        var title = header.querySelector('.agent-card-title');
+        if (title) title.textContent = modalAgents[agentIndex].name || 'Agent ' + (agentIndex + 1);
+      }
     });
   }
-  document.getElementById('automation-tod-time').value = '09:00';
-  renderAgentTimeChips();
 
-  document.getElementById('automation-first-start-only').checked = existingAutomation ? !!existingAutomation.firstStartOnly : false;
-  document.getElementById('automation-skip-permissions').checked = existingAutomation ? !!existingAutomation.skipPermissions : false;
-  document.getElementById('automation-db-connection').value = existingAutomation ? (existingAutomation.dbConnectionString || '') : '';
-  document.getElementById('automation-db-connection').type = 'password';
-  document.getElementById('automation-db-readonly').checked = existingAutomation ? (existingAutomation.dbReadOnly !== false) : true;
-  document.getElementById('automation-db-show').checked = false;
+  var removeBtn = card.querySelector('.agent-card-remove');
+  if (removeBtn) {
+    removeBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (modalAgents.length <= 1) { alert('Cannot remove the only agent.'); return; }
+      syncAllAgentsFromCards();
+      modalAgents.splice(agentIndex, 1);
+      renderModalAgentCards();
+    });
+  }
 
-  document.getElementById('automation-prompt-find-bar').classList.add('hidden');
-  document.getElementById('automation-modal-overlay').classList.remove('hidden');
-  document.getElementById('automation-name').focus();
+  var runModeSelect = card.querySelector('.agent-run-mode');
+  if (runModeSelect) {
+    runModeSelect.addEventListener('change', function () {
+      modalAgents[agentIndex].runMode = this.value;
+      var runAfterGroup = card.querySelector('.agent-runafter-group');
+      var schedSection = card.querySelector('.agent-schedule-section');
+      if (runAfterGroup) runAfterGroup.style.display = this.value === 'run_after' ? '' : 'none';
+      if (schedSection) schedSection.style.display = this.value === 'run_after' ? 'none' : '';
+    });
+  }
+
+  var schedSelect = card.querySelector('.agent-schedule-type');
+  if (schedSelect) {
+    schedSelect.addEventListener('change', function () {
+      var type = this.value;
+      var intervalFields = card.querySelector('.agent-interval-fields');
+      var todFields = card.querySelector('.agent-tod-fields');
+      var startupFields = card.querySelector('.agent-startup-fields');
+      if (intervalFields) intervalFields.style.display = type === 'interval' ? '' : 'none';
+      if (todFields) todFields.style.display = type === 'time_of_day' ? '' : 'none';
+      if (startupFields) startupFields.style.display = type === 'app_startup' ? '' : 'none';
+    });
+  }
+
+  var isoCheckbox = card.querySelector('.agent-isolation-checkbox');
+  if (isoCheckbox) {
+    isoCheckbox.addEventListener('change', function () {
+      modalAgents[agentIndex].isolation = modalAgents[agentIndex].isolation || {};
+      modalAgents[agentIndex].isolation.enabled = this.checked;
+    });
+  }
+
+  var addTimeBtn = card.querySelector('.agent-btn-add-time');
+  if (addTimeBtn) {
+    addTimeBtn.addEventListener('click', function () {
+      var timeInput = card.querySelector('.agent-tod-time');
+      if (!timeInput || !timeInput.value) return;
+      var parts = timeInput.value.split(':');
+      var h = parseInt(parts[0]);
+      var m = parseInt(parts[1]);
+      if (!modalAgents[agentIndex]._modalTimes) modalAgents[agentIndex]._modalTimes = [];
+      var exists = modalAgents[agentIndex]._modalTimes.some(function (t) { return t.hour === h && t.minute === m; });
+      if (exists) return;
+      modalAgents[agentIndex]._modalTimes.push({ hour: h, minute: m });
+      modalAgents[agentIndex]._modalTimes.sort(function (a, b) { return (a.hour * 60 + a.minute) - (b.hour * 60 + b.minute); });
+      renderAgentTimeChipsInCard(card, agentIndex);
+    });
+  }
+
+  card.querySelectorAll('input, textarea, select').forEach(function (el) {
+    el.addEventListener('keydown', function (e) { e.stopPropagation(); });
+  });
+
+  if (modalAgents[agentIndex].schedule && modalAgents[agentIndex].schedule.times) {
+    modalAgents[agentIndex]._modalTimes = modalAgents[agentIndex].schedule.times.slice();
+    renderAgentTimeChipsInCard(card, agentIndex);
+  }
 }
 
-function addAgentTime() {
-  var timeVal = document.getElementById('automation-tod-time').value;
-  if (!timeVal) return;
-  var parts = timeVal.split(':');
-  var h = parseInt(parts[0]);
-  var m = parseInt(parts[1]);
-  // Avoid duplicates
-  var exists = automationModalTimes.some(function (t) { return t.hour === h && t.minute === m; });
-  if (exists) return;
-  automationModalTimes.push({ hour: h, minute: m });
-  // Sort chronologically
-  automationModalTimes.sort(function (a, b) { return (a.hour * 60 + a.minute) - (b.hour * 60 + b.minute); });
-  renderAgentTimeChips();
-}
-
-function removeAgentTime(index) {
-  automationModalTimes.splice(index, 1);
-  renderAgentTimeChips();
-}
-
-function renderAgentTimeChips() {
-  var container = document.getElementById('automation-tod-times-list');
+function renderAgentTimeChipsInCard(card, agentIndex) {
+  var container = card.querySelector('.agent-tod-times-list');
+  if (!container) return;
+  var times = modalAgents[agentIndex]._modalTimes || [];
   container.innerHTML = '';
-  if (automationModalTimes.length === 0) {
-    container.innerHTML = '<span style="opacity:0.4;font-size:11px;">No times added yet — use the picker above</span>';
+  if (times.length === 0) {
+    container.innerHTML = '<span style="opacity:0.4;font-size:11px;">No times added yet</span>';
     return;
   }
-  automationModalTimes.forEach(function (t, i) {
+  times.forEach(function (t, i) {
     var chip = document.createElement('span');
     chip.className = 'automation-time-chip';
     var label = (t.hour < 10 ? '0' : '') + t.hour + ':' + (t.minute < 10 ? '0' : '') + t.minute;
     chip.innerHTML = label + '<button type="button" class="automation-time-chip-remove" title="Remove">&times;</button>';
     chip.querySelector('.automation-time-chip-remove').addEventListener('click', function () {
-      removeAgentTime(i);
+      times.splice(i, 1);
+      renderAgentTimeChipsInCard(card, agentIndex);
     });
     container.appendChild(chip);
   });
 }
 
-function closeAutomationModal() {
-  document.getElementById('automation-modal-overlay').classList.add('hidden');
-  document.getElementById('automation-prompt').readOnly = false;
-  document.getElementById('automation-prompt-find-bar').classList.add('hidden');
-  automationEditingId = null;
+function syncAgentFromCard(card, agentIndex) {
+  var agent = modalAgents[agentIndex];
+  if (!agent) return;
+  agent.name = (card.querySelector('.agent-name') || {}).value || '';
+  agent.prompt = (card.querySelector('.agent-prompt') || {}).value || '';
+
+  var runModeEl = card.querySelector('.agent-run-mode');
+  if (runModeEl) agent.runMode = runModeEl.value;
+
+  var runAfterChecks = card.querySelectorAll('.agent-runafter-chips input:checked');
+  agent.runAfter = [];
+  runAfterChecks.forEach(function (cb) {
+    var targetIdx = parseInt(cb.value);
+    var targetAgent = modalAgents[targetIdx];
+    if (targetAgent) agent.runAfter.push(targetAgent.id || 'temp_' + targetIdx);
+  });
+
+  var isoCheckbox = card.querySelector('.agent-isolation-checkbox');
+  if (isoCheckbox) {
+    agent.isolation = agent.isolation || {};
+    agent.isolation.enabled = isoCheckbox.checked;
+  }
+
+  var schedTypeEl = card.querySelector('.agent-schedule-type');
+  if (schedTypeEl) {
+    var schedType = schedTypeEl.value;
+    if (schedType === 'manual') {
+      agent.schedule = { type: 'manual' };
+    } else if (schedType === 'interval') {
+      var val = parseInt((card.querySelector('.agent-interval-value') || {}).value) || 60;
+      var unit = (card.querySelector('.agent-interval-unit') || {}).value || 'minutes';
+      agent.schedule = { type: 'interval', minutes: unit === 'hours' ? val * 60 : val };
+    } else if (schedType === 'app_startup') {
+      agent.schedule = { type: 'app_startup' };
+      agent.firstStartOnly = (card.querySelector('.agent-first-start-only') || {}).checked || false;
+    } else if (schedType === 'time_of_day') {
+      var days = [];
+      card.querySelectorAll('.agent-tod-days input:checked').forEach(function (cb) { days.push(cb.value); });
+      agent.schedule = { type: 'time_of_day', times: (agent._modalTimes || []).slice(), days: days };
+    }
+  }
+
+  agent.skipPermissions = (card.querySelector('.agent-skip-permissions') || {}).checked || false;
+  agent.dbConnectionString = (card.querySelector('.agent-db-connection') || {}).value.trim() || null;
+  agent.dbReadOnly = (card.querySelector('.agent-db-readonly') || {}).checked !== false;
 }
 
-function toggleAgentScheduleFields(type) {
-  document.getElementById('automation-interval-fields').style.display = type === 'interval' ? '' : 'none';
-  document.getElementById('automation-tod-fields').style.display = type === 'time_of_day' ? '' : 'none';
-  document.getElementById('automation-startup-fields').style.display = type === 'app_startup' ? '' : 'none';
-  // Manual type has no schedule fields
+function syncAllAgentsFromCards() {
+  document.querySelectorAll('#automation-agents-list .agent-card').forEach(function (card) {
+    var idx = parseInt(card.dataset.agentIndex);
+    syncAgentFromCard(card, idx);
+  });
 }
 
 function saveAutomation() {
-  var name = document.getElementById('automation-name').value.trim();
-  var prompt = document.getElementById('automation-prompt').value.trim();
-  if (!name || !prompt) { alert('Name and prompt are required.'); return; }
+  syncAllAgentsFromCards();
+
+  var isMulti = modalAgents.length > 1;
+  var automationName = isMulti ? document.getElementById('automation-name').value.trim() : (modalAgents[0].name || '');
+
+  if (isMulti && !automationName) { alert('Automation name is required.'); return; }
+  for (var i = 0; i < modalAgents.length; i++) {
+    if (!modalAgents[i].name || !modalAgents[i].prompt) {
+      alert('Agent ' + (i + 1) + ' needs a name and prompt.'); return;
+    }
+  }
   if (!activeProjectKey) { alert('Select a project first.'); return; }
 
-  var schedType = document.getElementById('automation-schedule-type').value;
-  var schedule;
-  if (schedType === 'manual') {
-    schedule = { type: 'manual' };
-  } else if (schedType === 'interval') {
-    var val = parseInt(document.getElementById('automation-interval-value').value) || 60;
-    var unit = document.getElementById('automation-interval-unit').value;
-    schedule = { type: 'interval', minutes: unit === 'hours' ? val * 60 : val };
-  } else if (schedType === 'app_startup') {
-    schedule = { type: 'app_startup' };
-  } else {
-    if (automationModalTimes.length === 0) { alert('Add at least one scheduled time.'); return; }
-    var days = [];
-    document.querySelectorAll('#automation-tod-days input:checked').forEach(function (cb) {
-      days.push(cb.value);
-    });
-    schedule = { type: 'time_of_day', times: automationModalTimes.slice(), days: days };
-  }
+  var hasIsolated = modalAgents.some(function (ag) { return ag.isolation && ag.isolation.enabled; });
 
-  var firstStartOnly = document.getElementById('automation-first-start-only').checked;
-  var skipPermissions = document.getElementById('automation-skip-permissions').checked;
-  var dbConnectionString = document.getElementById('automation-db-connection').value.trim() || null;
-  var dbReadOnly = document.getElementById('automation-db-readonly').checked;
+  var agents = modalAgents.map(function (ag) {
+    var clean = Object.assign({}, ag);
+    delete clean._modalTimes;
+    return clean;
+  });
 
   if (automationEditingId) {
-    window.electronAPI.updateAutomation(automationEditingId, {
-      name: name, prompt: prompt, schedule: schedule, firstStartOnly: firstStartOnly,
-      skipPermissions: skipPermissions, dbConnectionString: dbConnectionString, dbReadOnly: dbReadOnly
+    window.electronAPI.updateAutomation(automationEditingId, { name: automationName }).then(function () {
+      var promises = agents.map(function (ag) {
+        if (ag.id && ag.id.indexOf('temp_') !== 0) {
+          return window.electronAPI.updateAgent(automationEditingId, ag.id, ag);
+        } else {
+          return window.electronAPI.addAgent(automationEditingId, ag);
+        }
+      });
+      return Promise.all(promises);
     }).then(function () {
-      closeAutomationModal();
-      refreshAutomations();
-      refreshAutomationsFlyout();
+      if (hasIsolated) {
+        startCloneSetup(automationEditingId);
+      } else {
+        closeAutomationModal();
+        refreshAutomations();
+        refreshAutomationsFlyout();
+      }
     });
   } else {
-    window.electronAPI.createAutomation({
-      name: name, prompt: prompt, projectPath: activeProjectKey, schedule: schedule,
-      firstStartOnly: firstStartOnly, skipPermissions: skipPermissions,
-      dbConnectionString: dbConnectionString, dbReadOnly: dbReadOnly, createdBy: 'ui'
-    }).then(function () {
-      closeAutomationModal();
-      refreshAutomations();
-      refreshAutomationsFlyout();
+    var config = {
+      name: automationName,
+      projectPath: activeProjectKey,
+      agents: agents
+    };
+    window.electronAPI.createAutomation(config).then(function (automation) {
+      if (hasIsolated) {
+        automationEditingId = automation.id;
+        startCloneSetup(automation.id);
+      } else {
+        closeAutomationModal();
+        refreshAutomations();
+        refreshAutomationsFlyout();
+      }
     });
   }
 }
 
-document.getElementById('automation-schedule-type').addEventListener('change', function () {
-  toggleAgentScheduleFields(this.value);
-});
-document.getElementById('btn-automation-add-time').addEventListener('click', addAgentTime);
-document.getElementById('automation-tod-time').addEventListener('keydown', function (e) {
-  e.stopPropagation();
-  if (e.key === 'Enter') { e.preventDefault(); addAgentTime(); }
-});
-// Prevent keyboard shortcuts from stealing input in automation modal
-['automation-name', 'automation-prompt', 'automation-db-connection'].forEach(function (id) {
-  document.getElementById(id).addEventListener('keydown', function (e) {
-    e.stopPropagation();
+function startCloneSetup(automationId) {
+  var setupPanel = document.getElementById('automation-setup-panel');
+  var setupAgents = document.getElementById('automation-setup-agents');
+  var setupLog = document.getElementById('automation-setup-log');
+
+  document.getElementById('automation-agents-list').style.display = 'none';
+  document.getElementById('automation-add-agent-row').style.display = 'none';
+  document.getElementById('automation-name-group').style.display = 'none';
+  setupPanel.style.display = '';
+  setupLog.textContent = '';
+
+  document.getElementById('btn-automation-save').textContent = 'Setting up...';
+  document.getElementById('btn-automation-save').disabled = true;
+
+  window.electronAPI.getAutomationsForProject(activeProjectKey).then(function (automations) {
+    var automation = automations.find(function (a) { return a.id === automationId; });
+    if (!automation) return;
+
+    var isolatedAgents = automation.agents.filter(function (ag) { return ag.isolation && ag.isolation.enabled; });
+    setupAgents.innerHTML = '';
+    isolatedAgents.forEach(function (ag) {
+      var row = document.createElement('div');
+      row.className = 'automation-setup-agent-row';
+      row.id = 'setup-agent-' + ag.id;
+      row.innerHTML = '<span class="automation-setup-agent-icon">&#9711;</span> ' + escapeHtml(ag.name);
+      setupAgents.appendChild(row);
+    });
+
+    window.electronAPI.onCloneProgress(function (data) {
+      if (data.automationId !== automationId) return;
+      setupLog.textContent += data.line;
+      setupLog.scrollTop = setupLog.scrollHeight;
+    });
+
+    var cloneNext = function (index) {
+      if (index >= isolatedAgents.length) {
+        document.getElementById('btn-automation-save').textContent = 'Done';
+        document.getElementById('btn-automation-save').disabled = false;
+        document.getElementById('btn-automation-save').onclick = function () {
+          closeAutomationModal();
+          refreshAutomations();
+          refreshAutomationsFlyout();
+        };
+        return;
+      }
+      var ag = isolatedAgents[index];
+      var row = document.getElementById('setup-agent-' + ag.id);
+      if (row) row.querySelector('.automation-setup-agent-icon').innerHTML = '&#8987;';
+
+      window.electronAPI.setupAgentClone(automationId, ag.id).then(function (result) {
+        if (row) {
+          row.querySelector('.automation-setup-agent-icon').innerHTML = result.error ? '&#10007;' : '&#10003;';
+          if (result.error) row.style.color = '#ef4444';
+          else row.style.color = '#22c55e';
+        }
+        if (result.error) {
+          setupLog.textContent += '\nERROR: ' + result.error + '\n';
+        }
+        cloneNext(index + 1);
+      });
+    };
+    cloneNext(0);
   });
-});
-
-// Show/hide connection string toggle
-document.getElementById('automation-db-show').addEventListener('change', function () {
-  document.getElementById('automation-db-connection').type = this.checked ? 'text' : 'password';
-});
-
-// --- Automation prompt find-in-text ---
-var promptFindMatches = [];
-var promptFindIndex = -1;
-
-function togglePromptFind() {
-  var bar = document.getElementById('automation-prompt-find-bar');
-  if (bar.classList.contains('hidden')) {
-    bar.classList.remove('hidden');
-    document.getElementById('automation-prompt-find-input').value = '';
-    document.getElementById('automation-prompt-find-count').textContent = '';
-    promptFindMatches = [];
-    promptFindIndex = -1;
-    document.getElementById('automation-prompt').readOnly = true;
-    document.getElementById('automation-prompt-find-input').focus();
-  } else {
-    bar.classList.add('hidden');
-    document.getElementById('automation-prompt').readOnly = false;
-    document.getElementById('automation-prompt').focus();
-  }
 }
-
-function searchPrompt() {
-  var input = document.getElementById('automation-prompt-find-input');
-  var textarea = document.getElementById('automation-prompt');
-  var countEl = document.getElementById('automation-prompt-find-count');
-  var query = input.value;
-  promptFindMatches = [];
-  promptFindIndex = -1;
-
-  if (!query) {
-    countEl.textContent = '';
-    return;
-  }
-
-  var text = textarea.value;
-  var lowerText = text.toLowerCase();
-  var lowerQuery = query.toLowerCase();
-  var idx = 0;
-  while (true) {
-    var found = lowerText.indexOf(lowerQuery, idx);
-    if (found === -1) break;
-    promptFindMatches.push(found);
-    idx = found + 1;
-  }
-
-  if (promptFindMatches.length === 0) {
-    countEl.textContent = '0/0';
-  } else {
-    promptFindIndex = 0;
-    countEl.textContent = '1/' + promptFindMatches.length;
-  }
-}
-
-function highlightPromptMatch() {
-  if (promptFindIndex < 0 || promptFindIndex >= promptFindMatches.length) return;
-  var textarea = document.getElementById('automation-prompt');
-  var pos = promptFindMatches[promptFindIndex];
-  var query = document.getElementById('automation-prompt-find-input').value;
-  textarea.focus();
-  textarea.setSelectionRange(pos, pos + query.length);
-  // Scroll the match into view
-  var lineHeight = parseInt(getComputedStyle(textarea).lineHeight) || 16;
-  var textBefore = textarea.value.substring(0, pos);
-  var lineNum = (textBefore.match(/\n/g) || []).length;
-  textarea.scrollTop = Math.max(0, lineNum * lineHeight - textarea.clientHeight / 2);
-}
-
-function promptFindNext() {
-  if (promptFindMatches.length === 0) return;
-  promptFindIndex = (promptFindIndex + 1) % promptFindMatches.length;
-  document.getElementById('automation-prompt-find-count').textContent = (promptFindIndex + 1) + '/' + promptFindMatches.length;
-  highlightPromptMatch();
-}
-
-function promptFindPrev() {
-  if (promptFindMatches.length === 0) return;
-  promptFindIndex = (promptFindIndex - 1 + promptFindMatches.length) % promptFindMatches.length;
-  document.getElementById('automation-prompt-find-count').textContent = (promptFindIndex + 1) + '/' + promptFindMatches.length;
-  highlightPromptMatch();
-}
-
-document.getElementById('btn-automation-prompt-find').addEventListener('click', togglePromptFind);
-document.getElementById('btn-automation-prompt-find-close').addEventListener('click', togglePromptFind);
-document.getElementById('automation-prompt-find-input').addEventListener('input', searchPrompt);
-document.getElementById('automation-prompt-find-input').addEventListener('keydown', function (e) {
-  e.stopPropagation();
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    if (e.shiftKey) promptFindPrev();
-    else promptFindNext();
-  }
-  if (e.key === 'Escape') {
-    e.preventDefault();
-    togglePromptFind();
-  }
-});
-document.getElementById('btn-automation-prompt-find-next').addEventListener('click', promptFindNext);
-document.getElementById('btn-automation-prompt-find-prev').addEventListener('click', promptFindPrev);
-
-// Ctrl+F in the prompt textarea opens the find bar
-document.getElementById('automation-prompt').addEventListener('keydown', function (e) {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
-    e.preventDefault();
-    togglePromptFind();
-  }
-});
 
 document.getElementById('btn-automation-modal-close').addEventListener('click', closeAutomationModal);
 document.getElementById('btn-automation-cancel').addEventListener('click', closeAutomationModal);
 document.getElementById('btn-automation-save').addEventListener('click', saveAutomation);
-document.getElementById('automation-modal-overlay').addEventListener('click', function (e) {
-  // Only cancel/close buttons should dismiss the automation modal
-});
 document.getElementById('btn-add-automation').addEventListener('click', function () {
   if (!activeProjectKey) { alert('Select a project first.'); return; }
   openAutomationModal(null);
+});
+document.getElementById('btn-add-agent').addEventListener('click', function () {
+  syncAllAgentsFromCards();
+  if (modalAgents.length === 1 && !document.getElementById('automation-name').value) {
+    document.getElementById('automation-name').value = modalAgents[0].name || '';
+  }
+  modalAgents.push({
+    name: '', prompt: '', schedule: { type: 'interval', minutes: 60 },
+    runMode: 'independent', runAfter: [], runOnUpstreamFailure: false, isolation: { enabled: false, clonePath: null },
+    skipPermissions: false, dbConnectionString: null, dbReadOnly: true, firstStartOnly: false
+  });
+  renderModalAgentCards();
 });
 document.getElementById('btn-refresh-automations').addEventListener('click', refreshAutomations);
 
