@@ -59,6 +59,73 @@ function writeLoops(data) {
   fs.writeFileSync(LOOPS_FILE, JSON.stringify(data, null, 2), 'utf8');
 }
 
+// --- Automations Persistence ---
+
+function readAutomations() {
+  ensureConfigDir();
+  try {
+    return JSON.parse(fs.readFileSync(AUTOMATIONS_FILE, 'utf8'));
+  } catch {
+    return { globalEnabled: true, maxConcurrentRuns: 3, agentReposBaseDir: path.join(os.homedir(), '.claudes', 'agents'), automations: [] };
+  }
+}
+
+function writeAutomations(data) {
+  ensureConfigDir();
+  fs.writeFileSync(AUTOMATIONS_FILE, JSON.stringify(data, null, 2), 'utf8');
+}
+
+function ensureAgentRunsDir(automationId, agentId) {
+  const dir = path.join(AUTOMATIONS_RUNS_DIR, automationId, agentId);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+}
+
+function saveAgentRun(automationId, agentId, runData) {
+  const dir = ensureAgentRunsDir(automationId, agentId);
+  const filename = new Date(runData.startedAt).toISOString().replace(/[:.]/g, '-') + '.json';
+  if (runData.output && runData.output.length > 50000) {
+    runData.output = runData.output.substring(0, 50000) + '\n...[truncated]';
+  }
+  fs.writeFileSync(path.join(dir, filename), JSON.stringify(runData, null, 2), 'utf8');
+  pruneAgentRuns(dir);
+}
+
+function pruneAgentRuns(dir) {
+  try {
+    const files = fs.readdirSync(dir).filter(f => f.endsWith('.json')).sort();
+    while (files.length > 50) {
+      fs.unlinkSync(path.join(dir, files.shift()));
+    }
+  } catch { /* ignore */ }
+}
+
+function getAgentHistory(automationId, agentId, count) {
+  const dir = path.join(AUTOMATIONS_RUNS_DIR, automationId, agentId);
+  try {
+    const files = fs.readdirSync(dir).filter(f => f.endsWith('.json')).sort().reverse();
+    const results = [];
+    for (let i = 0; i < Math.min(count || 5, files.length); i++) {
+      const data = JSON.parse(fs.readFileSync(path.join(dir, files[i]), 'utf8'));
+      results.push({
+        startedAt: data.startedAt,
+        completedAt: data.completedAt,
+        durationMs: data.durationMs,
+        status: data.status,
+        summary: data.summary,
+        attentionItems: data.attentionItems || [],
+        costUsd: data.costUsd,
+        exitCode: data.exitCode
+      });
+    }
+    return results;
+  } catch {
+    return [];
+  }
+}
+
 function ensureLoopRunsDir(loopId) {
   const dir = path.join(LOOPS_RUNS_DIR, loopId);
   if (!fs.existsSync(dir)) {
