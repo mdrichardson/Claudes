@@ -3366,7 +3366,7 @@ html, body {
 }
 
 /* ============================================================
-   Loops
+   Automations
    ============================================================ */
 
 /* Explorer tab: AUTOMATIONS panel */
@@ -3601,7 +3601,7 @@ html, body {
   background: rgba(245,166,35,0.2);
 }
 
-/* Loop Detail Panel */
+/* Automation Detail Panel */
 .automation-detail-panel {
   display: flex;
   flex-direction: column;
@@ -3713,7 +3713,7 @@ html, body {
   background: var(--bg-main);
 }
 
-/* Loop card summary */
+/* Automation card summary */
 .automation-card-summary {
   font-size: 11px;
   color: var(--text-secondary);
@@ -3743,7 +3743,7 @@ html, body {
   white-space: nowrap;
 }
 
-/* Loop detail summary & attention */
+/* Automation detail summary & attention */
 .automation-detail-summary {
   padding: 8px 10px;
   font-size: 12px;
@@ -3983,7 +3983,7 @@ html, body {
   color: white;
 }
 
-/* Loop modal */
+/* Automation modal */
 .automation-modal {
   width: 500px;
 }
@@ -4154,7 +4154,7 @@ html, body {
   gap: 3px;
 }
 
-/* Toolbar Loop Manager button */
+/* Toolbar Automations Manager button */
 #btn-automations-flyout {
   background: none;
   border: none;
