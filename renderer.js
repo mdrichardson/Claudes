@@ -5760,6 +5760,21 @@ function renderSimpleDetail(automation, agent) {
   var metaEl = document.getElementById('automation-detail-meta');
   metaEl.textContent = formatScheduleText(agent) + (agent.lastRunAt ? ' \u00b7 Last: ' + new Date(agent.lastRunAt).toLocaleString() : '');
 
+  if (agent.isolation && agent.isolation.enabled && agent.lastError && agent.lastError.indexOf('Working directory not found') !== -1) {
+    var recloneBtn = document.createElement('button');
+    recloneBtn.className = 'automation-detail-run-all';
+    recloneBtn.textContent = 'Re-clone';
+    recloneBtn.title = 'Re-clone repository';
+    recloneBtn.addEventListener('click', function () {
+      window.electronAPI.setupAgentClone(automation.id, agent.id).then(function (result) {
+        if (result.error) alert('Re-clone failed: ' + result.error);
+        else { refreshAutomations(); openAutomationDetail(automation); }
+      });
+    });
+    metaEl.appendChild(document.createTextNode(' '));
+    metaEl.appendChild(recloneBtn);
+  }
+
   activeAgentDetailId = agent.id;
   var runSelect = document.getElementById('automation-detail-run-select');
   runSelect.style.display = '';
@@ -5840,6 +5855,11 @@ function renderMultiAgentDetail(automation) {
     var statusText = agent.currentRunStartedAt ? 'running...' : (agent.lastRunStatus || 'pending');
     var schedText = agent.runMode === 'run_after' ? 'Waits for upstream' : formatScheduleText(agent);
 
+    var recloneHtml = '';
+    if (agent.isolation && agent.isolation.enabled && agent.lastError && agent.lastError.indexOf('Working directory not found') !== -1) {
+      recloneHtml = '<button class="pipeline-btn-reclone" title="Re-clone repository">Re-clone</button>';
+    }
+
     row.innerHTML = '<div class="pipeline-agent-header">' +
       '<span class="pipeline-agent-name">' + escapeHtml(agent.name) + '</span>' +
       '<span class="pipeline-agent-status" style="color:' + borderColor + '">' + statusText + '</span>' +
@@ -5849,6 +5869,7 @@ function renderMultiAgentDetail(automation) {
       '<div class="pipeline-agent-actions">' +
         '<button class="pipeline-btn-view-output" title="View Output">Output</button>' +
         '<button class="pipeline-btn-history" title="History">History</button>' +
+        recloneHtml +
       '</div>';
 
     row.querySelector('.pipeline-btn-view-output').addEventListener('click', function () {
@@ -5861,6 +5882,15 @@ function renderMultiAgentDetail(automation) {
       document.getElementById('automation-detail-run-select').style.display = '';
       renderSimpleDetail(automation, agent);
     });
+    var recloneBtn = row.querySelector('.pipeline-btn-reclone');
+    if (recloneBtn) {
+      recloneBtn.addEventListener('click', function () {
+        window.electronAPI.setupAgentClone(automation.id, agent.id).then(function (result) {
+          if (result.error) alert('Re-clone failed: ' + result.error);
+          else refreshAutomations();
+        });
+      });
+    }
 
     pipelineEl.appendChild(row);
   });
@@ -6010,10 +6040,13 @@ function createAgentCardHtml(agentIndex, agent, isCollapsed, allAgents) {
     if (runMode === 'run_after') badges += '<span class="agent-badge agent-badge-chained">Chained</span>';
     if (agent && agent.isolation && agent.isolation.enabled) badges += '<span class="agent-badge agent-badge-isolated">Isolated</span>';
 
+    var schedSummary = agent ? formatScheduleText(agent) : '';
+
     header = '<div class="agent-card-header" data-agent-index="' + agentIndex + '">' +
       '<span class="agent-card-collapse-icon">' + (isCollapsed ? '&#9654;' : '&#9660;') + '</span>' +
       '<span class="agent-card-title">' + escapeHtml(name || 'Agent ' + (agentIndex + 1)) + '</span>' +
       badges +
+      (schedSummary ? '<span class="agent-card-schedule-summary">' + schedSummary + '</span>' : '') +
       '<button type="button" class="agent-card-remove" data-agent-index="' + agentIndex + '" title="Remove agent">&times;</button>' +
       '</div>';
   }
@@ -6044,11 +6077,18 @@ function createAgentCardHtml(agentIndex, agent, isCollapsed, allAgents) {
   var isolationHtml = '';
   if (isMulti) {
     var isolationEnabled = agent && agent.isolation && agent.isolation.enabled;
+    var predictedPath = '';
+    if (isolationEnabled) {
+      predictedPath = agent.isolation && agent.isolation.clonePath ? agent.isolation.clonePath : '~/.claudes/agents/<project>/<agent-name>/';
+    }
     isolationHtml = '<div class="automation-form-group">' +
       '<label class="automation-permission-option">' +
       '<input type="checkbox" class="agent-isolation-checkbox"' + (isolationEnabled ? ' checked' : '') + '>' +
       '<span>Repo isolation <span class="automation-permission-hint">(clone into separate directory)</span></span>' +
       '</label>' +
+      '<div class="agent-isolation-path" style="' + (isolationEnabled ? '' : 'display:none;') + '">' +
+      '<span class="automation-permission-hint">Clone path: ' + escapeHtml(predictedPath) + '</span>' +
+      '</div>' +
       '</div>';
   }
 
@@ -6167,6 +6207,25 @@ function bindAgentCardEvents(card, agentIndex) {
       e.stopPropagation();
       if (modalAgents.length <= 1) { alert('Cannot remove the only agent.'); return; }
       syncAllAgentsFromCards();
+      var removedAgent = modalAgents[agentIndex];
+      var removedId = removedAgent.id || ('temp_' + agentIndex);
+      // Check if other agents depend on this one
+      var dependents = modalAgents.filter(function (ag, i) {
+        return i !== agentIndex && ag.runMode === 'run_after' && ag.runAfter && ag.runAfter.indexOf(removedId) !== -1;
+      });
+      if (dependents.length > 0) {
+        var names = dependents.map(function (ag) { return ag.name || 'unnamed'; }).join(', ');
+        if (!confirm('Agent "' + (removedAgent.name || 'unnamed') + '" is depended on by: ' + names + '. They will become independent. Continue?')) return;
+      }
+      // Clean up runAfter references
+      modalAgents.forEach(function (ag) {
+        if (ag.runAfter) {
+          ag.runAfter = ag.runAfter.filter(function (id) { return id !== removedId; });
+          if (ag.runAfter.length === 0 && ag.runMode === 'run_after') {
+            ag.runMode = 'independent';
+          }
+        }
+      });
       modalAgents.splice(agentIndex, 1);
       renderModalAgentCards();
     });
@@ -6201,6 +6260,8 @@ function bindAgentCardEvents(card, agentIndex) {
     isoCheckbox.addEventListener('change', function () {
       modalAgents[agentIndex].isolation = modalAgents[agentIndex].isolation || {};
       modalAgents[agentIndex].isolation.enabled = this.checked;
+      var pathEl = card.querySelector('.agent-isolation-path');
+      if (pathEl) pathEl.style.display = this.checked ? '' : 'none';
     });
   }
 
@@ -6445,9 +6506,17 @@ function startCloneSetup(automationId) {
         document.getElementById('btn-automation-save').textContent = 'Done';
         document.getElementById('btn-automation-save').disabled = false;
         document.getElementById('btn-automation-save').onclick = function () {
+          var autoId = automationEditingId;
           closeAutomationModal();
           refreshAutomations();
           refreshAutomationsFlyout();
+          // Navigate to detail view
+          if (autoId) {
+            window.electronAPI.getAutomationsForProject(activeProjectKey).then(function (automations) {
+              var auto = automations.find(function (a) { return a.id === autoId; });
+              if (auto) openAutomationDetail(auto);
+            });
+          }
         };
         return;
       }

@@ -4224,6 +4224,11 @@ html, body {
   flex: 1;
 }
 
+.agent-card-schedule-summary {
+  font-size: 11px;
+  opacity: 0.5;
+}
+
 .agent-card-remove {
   background: none;
   border: none;
