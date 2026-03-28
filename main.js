@@ -126,6 +126,81 @@ function getAgentHistory(automationId, agentId, count) {
   }
 }
 
+function migrateLoopsToAutomations() {
+  // Only migrate if loops.json exists and automations.json does not
+  if (!fs.existsSync(LOOPS_FILE) || fs.existsSync(AUTOMATIONS_FILE)) return;
+
+  console.log('[Migration] Migrating loops.json to automations.json...');
+
+  // Backup loops.json
+  const backupPath = path.join(CONFIG_DIR, 'loops.backup.json');
+  fs.copyFileSync(LOOPS_FILE, backupPath);
+  console.log('[Migration] Backed up loops.json to loops.backup.json');
+
+  const loopData = JSON.parse(fs.readFileSync(LOOPS_FILE, 'utf8'));
+
+  const automationsData = {
+    globalEnabled: loopData.globalEnabled !== undefined ? loopData.globalEnabled : true,
+    maxConcurrentRuns: loopData.maxConcurrentRuns || 3,
+    agentReposBaseDir: path.join(os.homedir(), '.claudes', 'agents'),
+    automations: []
+  };
+
+  // Transform each loop into an automation with a single agent
+  (loopData.loops || []).forEach(loop => {
+    const automationId = generateAutomationId();
+    const agentId = generateAgentId();
+
+    const agent = {
+      id: agentId,
+      name: loop.name,
+      prompt: loop.prompt,
+      schedule: loop.schedule,
+      runMode: 'independent',
+      runAfter: [],
+      runOnUpstreamFailure: false,
+      isolation: { enabled: false, clonePath: null },
+      enabled: loop.enabled !== undefined ? loop.enabled : true,
+      skipPermissions: loop.skipPermissions || false,
+      firstStartOnly: loop.firstStartOnly || false,
+      dbConnectionString: loop.dbConnectionString || null,
+      dbReadOnly: loop.dbReadOnly !== false,
+      lastRunAt: loop.lastRunAt || null,
+      lastRunStatus: loop.lastRunStatus || null,
+      lastError: loop.lastError || null,
+      lastSummary: loop.lastSummary || null,
+      lastAttentionItems: loop.lastAttentionItems || null,
+      currentRunStartedAt: loop.currentRunStartedAt || null
+    };
+
+    const automation = {
+      id: automationId,
+      name: loop.name,
+      projectPath: loop.projectPath,
+      agents: [agent],
+      enabled: loop.enabled !== undefined ? loop.enabled : true,
+      createdAt: loop.createdAt || new Date().toISOString()
+    };
+
+    automationsData.automations.push(automation);
+
+    // Migrate run history: loop-runs/{loopId}/ -> automation-runs/{automationId}/{agentId}/
+    const oldRunDir = path.join(LOOPS_RUNS_DIR, loop.id);
+    if (fs.existsSync(oldRunDir)) {
+      const newRunDir = path.join(AUTOMATIONS_RUNS_DIR, automationId, agentId);
+      fs.mkdirSync(newRunDir, { recursive: true });
+      const runFiles = fs.readdirSync(oldRunDir).filter(f => f.endsWith('.json'));
+      runFiles.forEach(file => {
+        fs.copyFileSync(path.join(oldRunDir, file), path.join(newRunDir, file));
+      });
+      console.log('[Migration] Migrated ' + runFiles.length + ' run files for loop "' + loop.name + '"');
+    }
+  });
+
+  writeAutomations(automationsData);
+  console.log('[Migration] Created automations.json with ' + automationsData.automations.length + ' automations');
+}
+
 function ensureLoopRunsDir(loopId) {
   const dir = path.join(LOOPS_RUNS_DIR, loopId);
   if (!fs.existsSync(dir)) {
@@ -1746,6 +1821,7 @@ if (!gotLock) {
     createTray();
     createWindow();
     setupAutoUpdater();
+    migrateLoopsToAutomations();
     startLoopScheduler();
   });
 
