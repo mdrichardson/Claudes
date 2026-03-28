@@ -4652,6 +4652,9 @@ var settingsModal = document.getElementById('settings-modal');
 document.getElementById('btn-settings').addEventListener('click', function () {
   loadNotifSettings();
   loadStartWithOS();
+  window.electronAPI.getAutomationSettings().then(function (settings) {
+    document.getElementById('setting-agent-repos-dir').value = settings.agentReposBaseDir || '';
+  });
   settingsModal.classList.remove('hidden');
 });
 
@@ -4667,6 +4670,23 @@ document.getElementById('setting-notif-taskbar').addEventListener('change', save
 document.getElementById('setting-notif-sidebar').addEventListener('change', saveNotifSettings);
 document.getElementById('setting-notif-header').addEventListener('change', saveNotifSettings);
 document.getElementById('setting-start-with-os').addEventListener('change', saveStartWithOS);
+
+document.getElementById('btn-browse-agent-repos').addEventListener('click', function () {
+  window.electronAPI.openDirectoryDialog().then(function (result) {
+    if (result) {
+      document.getElementById('setting-agent-repos-dir').value = result;
+      window.electronAPI.updateAutomationSettings({ agentReposBaseDir: result });
+    }
+  });
+});
+
+document.getElementById('setting-agent-repos-dir').addEventListener('change', function () {
+  window.electronAPI.updateAutomationSettings({ agentReposBaseDir: this.value.trim() });
+});
+
+document.getElementById('setting-agent-repos-dir').addEventListener('keydown', function (e) {
+  e.stopPropagation();
+});
 
 btnClaudeMd.addEventListener('click', openClaudeMdModal);
 

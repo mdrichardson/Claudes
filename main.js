@@ -1861,6 +1861,22 @@ ipcMain.handle('automations:validateDependencies', (event, agents) => {
   return { valid: true };
 });
 
+ipcMain.handle('automations:getSettings', () => {
+  const data = readAutomations();
+  return {
+    agentReposBaseDir: data.agentReposBaseDir || path.join(os.homedir(), '.claudes', 'agents')
+  };
+});
+
+ipcMain.handle('automations:updateSettings', (event, settings) => {
+  const data = readAutomations();
+  if (settings.agentReposBaseDir !== undefined) {
+    data.agentReposBaseDir = settings.agentReposBaseDir;
+  }
+  writeAutomations(data);
+  return true;
+});
+
 // --- Loop Scheduler & Execution ---
 
 const runningLoops = new Map(); // loopId -> child process
