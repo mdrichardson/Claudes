@@ -5540,47 +5540,6 @@ function formatScheduleText(agent) {
   return labels.join(', ');
 }
 
-function getNextScheduledTime(automation) {
-  var times = automation.schedule.times || [{ hour: automation.schedule.hour, minute: automation.schedule.minute || 0 }];
-  var now = new Date();
-  var nowMinutes = now.getHours() * 60 + now.getMinutes();
-  var dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-  var lastRun = automation.lastRunAt ? new Date(automation.lastRunAt) : null;
-
-  // Check remaining times today
-  var today = dayNames[now.getDay()];
-  var todayAllowed = !automation.schedule.days || automation.schedule.days.length === 0 || automation.schedule.days.indexOf(today) !== -1;
-  if (todayAllowed) {
-    for (var i = 0; i < times.length; i++) {
-      var sm = times[i].hour * 60 + times[i].minute;
-      if (sm > nowMinutes) {
-        var next = new Date(now);
-        next.setHours(times[i].hour, times[i].minute, 0, 0);
-        return next.getTime();
-      }
-      // If time has passed but hasn't run yet today for this slot
-      if (sm <= nowMinutes && lastRun) {
-        var lastRunMinutes = lastRun.getHours() * 60 + lastRun.getMinutes();
-        if (lastRun.toDateString() !== now.toDateString() || lastRunMinutes < sm) {
-          return Date.now(); // due now
-        }
-      }
-    }
-  }
-
-  // Find next allowed day
-  for (var d = 1; d <= 7; d++) {
-    var futureDate = new Date(now);
-    futureDate.setDate(futureDate.getDate() + d);
-    var futureDay = dayNames[futureDate.getDay()];
-    if (!automation.schedule.days || automation.schedule.days.length === 0 || automation.schedule.days.indexOf(futureDay) !== -1) {
-      futureDate.setHours(times[0].hour, times[0].minute, 0, 0);
-      return futureDate.getTime();
-    }
-  }
-  return null;
-}
-
 function renderAutomationCards(automations, container) {
   container.innerHTML = '';
   if (automations.length === 0) {

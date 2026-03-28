@@ -1160,9 +1160,15 @@ ipcMain.handle('automations:create', (event, config) => {
   const data = readAutomations();
   const automationId = generateAutomationId();
 
-  const agents = (config.agents || []).map(agentConfig => {
+  // First pass: generate real IDs and build a mapping from temp IDs
+  const idMap = {};
+  const agents = (config.agents || []).map((agentConfig, idx) => {
+    const newId = generateAgentId();
+    // Map temp_N references to the real ID
+    idMap['temp_' + idx] = newId;
+    if (agentConfig.id) idMap[agentConfig.id] = newId;
     return Object.assign({
-      id: generateAgentId(),
+      id: newId,
       runMode: 'independent',
       runAfter: [],
       runOnUpstreamFailure: false,
@@ -1178,7 +1184,14 @@ ipcMain.handle('automations:create', (event, config) => {
       lastSummary: null,
       lastAttentionItems: null,
       currentRunStartedAt: null
-    }, agentConfig);
+    }, agentConfig, { id: newId });
+  });
+
+  // Second pass: remap runAfter references from temp IDs to real IDs
+  agents.forEach(agent => {
+    if (agent.runAfter && agent.runAfter.length > 0) {
+      agent.runAfter = agent.runAfter.map(ref => idMap[ref] || ref);
+    }
   });
 
   const automation = {
@@ -1578,8 +1591,12 @@ ipcMain.handle('automations:import', (event, projectPath) => {
 
     automations.forEach(imported => {
       const automationId = generateAutomationId();
-      const agents = (imported.agents || []).map(ag => {
+      // First pass: generate IDs and build mapping
+      const importIdMap = {};
+      const agents = (imported.agents || []).map((ag, idx) => {
         const newId = generateAgentId();
+        if (ag.id) importIdMap[ag.id] = newId;
+        importIdMap['temp_' + idx] = newId;
         return Object.assign({
           id: newId,
           runMode: 'independent',
@@ -1598,6 +1615,12 @@ ipcMain.handle('automations:import', (event, projectPath) => {
           lastAttentionItems: null,
           currentRunStartedAt: null
         }, ag, { id: newId, isolation: { enabled: ag.isolation ? ag.isolation.enabled : false, clonePath: null } });
+      });
+      // Second pass: remap runAfter references
+      agents.forEach(agent => {
+        if (agent.runAfter && agent.runAfter.length > 0) {
+          agent.runAfter = agent.runAfter.map(ref => importIdMap[ref] || ref);
+        }
       });
 
       data.automations.push({
@@ -1641,7 +1664,7 @@ ipcMain.handle('automations:updateSettings', (event, settings) => {
   return true;
 });
 
-// --- Loop Scheduler & Execution ---
+// --- Automations Scheduler & Execution ---
 
 const agentLiveOutputBuffers = new Map(); // 'automationId:agentId' -> string[] chunks
 const runningAgents = new Map(); // 'automationId:agentId' -> child process
@@ -2084,7 +2107,7 @@ function hasCyclicDependencies(agents) {
   return false;
 }
 
-let loopSchedulerTimer = null;
+let schedulerTimer = null;
 
 function startAutomationScheduler() {
   // Startup recovery: clear stale "running" states in automations
@@ -2140,7 +2163,7 @@ function startAutomationScheduler() {
   }, 5000);
 
   // Check every 30 seconds
-  loopSchedulerTimer = setInterval(() => {
+  schedulerTimer = setInterval(() => {
     const autoData = readAutomations();
     if (!autoData.globalEnabled) return;
     const now = Date.now();
@@ -2156,9 +2179,9 @@ function startAutomationScheduler() {
 }
 
 function stopAutomationScheduler() {
-  if (loopSchedulerTimer) {
-    clearInterval(loopSchedulerTimer);
-    loopSchedulerTimer = null;
+  if (schedulerTimer) {
+    clearInterval(schedulerTimer);
+    schedulerTimer = null;
   }
 
   // Kill running agents
