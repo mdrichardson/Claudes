@@ -1564,10 +1564,58 @@ ipcMain.handle('automations:toggleGlobal', () => {
   return data.globalEnabled;
 });
 
+ipcMain.handle('automations:getAgentHistory', (event, automationId, agentId, count) => {
+  return getAgentHistory(automationId, agentId, count);
+});
+
+ipcMain.handle('automations:getAgentRunDetail', (event, automationId, agentId, startedAt) => {
+  const dir = path.join(AUTOMATIONS_RUNS_DIR, automationId, agentId);
+  try {
+    const filename = new Date(startedAt).toISOString().replace(/[:.]/g, '-') + '.json';
+    const filePath = path.join(dir, filename);
+    if (fs.existsSync(filePath)) {
+      return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    }
+    // Fallback: search by startedAt field
+    const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+    for (const f of files) {
+      const data = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+      if (data.startedAt === startedAt) return data;
+    }
+  } catch { /* ignore */ }
+  return null;
+});
+
+ipcMain.handle('automations:getAgentLiveOutput', (event, automationId, agentId) => {
+  const key = automationId + ':' + agentId;
+  const liveChunks = agentLiveOutputBuffers.get(key);
+  if (liveChunks) return liveChunks.join('');
+  return null;
+});
+
+ipcMain.handle('automations:runAgentNow', (event, automationId, agentId) => {
+  runAgent(automationId, agentId);
+  return true;
+});
+
+ipcMain.handle('automations:runAutomationNow', (event, automationId) => {
+  const data = readAutomations();
+  const automation = data.automations.find(a => a.id === automationId);
+  if (!automation) return false;
+  // Run all independent agents — dependents will cascade
+  automation.agents.forEach(agent => {
+    if (agent.enabled && agent.runMode === 'independent') {
+      runAgent(automation.id, agent.id);
+    }
+  });
+  return true;
+});
+
 // --- Loop Scheduler & Execution ---
 
 const runningLoops = new Map(); // loopId -> child process
 const liveOutputBuffers = new Map(); // loopId -> string[] chunks
+const agentLiveOutputBuffers = new Map(); // 'automationId:agentId' -> string[] chunks
 const loopQueue = []; // loopIds waiting for a slot
 
 const LOOP_PROMPT_SUFFIX = '\n\nEnd your response with a JSON block wrapped in :::loop-result markers like this:\n:::loop-result\n{"summary": "Brief one-line summary", "attentionItems": [{"summary": "Short description", "detail": "Full context"}]}\n:::loop-result\nIf there are no issues, use an empty attentionItems array.';
