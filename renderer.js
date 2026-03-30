@@ -46,6 +46,7 @@ var projectStates = new Map();
 var activeProjectKey = null;
 
 var config = { projects: [], activeProjectIndex: -1 };
+var projectDragFromIndex = -1; // For sidebar drag-to-reorder
 
 // Automations state
 var automationsForProject = [];
@@ -611,22 +612,25 @@ function renderProjectList() {
       setActiveProject(index, false);
     });
 
-    // Drag to reorder
+    // Drag to reorder — use module-level var since dataTransfer.getData is blocked in dragover
     item.setAttribute('draggable', 'true');
     item.addEventListener('dragstart', function (e) {
-      e.dataTransfer.setData('text/plain', String(index));
-      item.classList.add('dragging');
+      projectDragFromIndex = index;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', ''); // Required for Firefox
+      setTimeout(function () { item.classList.add('dragging'); }, 0);
     });
     item.addEventListener('dragend', function () {
       item.classList.remove('dragging');
+      projectDragFromIndex = -1;
       document.querySelectorAll('.project-item.drag-over').forEach(function (el) {
         el.classList.remove('drag-over');
       });
     });
     item.addEventListener('dragover', function (e) {
       e.preventDefault();
-      var draggingIdx = parseInt(e.dataTransfer.getData('text/plain') || '-1');
-      if (draggingIdx !== index) {
+      e.dataTransfer.dropEffect = 'move';
+      if (projectDragFromIndex !== -1 && projectDragFromIndex !== index) {
         item.classList.add('drag-over');
       }
     });
@@ -636,12 +640,11 @@ function renderProjectList() {
     item.addEventListener('drop', function (e) {
       e.preventDefault();
       item.classList.remove('drag-over');
-      var fromIdx = parseInt(e.dataTransfer.getData('text/plain'));
-      if (isNaN(fromIdx) || fromIdx === index) return;
-      // Reorder the projects array
+      var fromIdx = projectDragFromIndex;
+      projectDragFromIndex = -1;
+      if (fromIdx === -1 || fromIdx === index) return;
       var moved = config.projects.splice(fromIdx, 1)[0];
       config.projects.splice(index, 0, moved);
-      // Update activeProjectIndex
       if (config.activeProjectIndex === fromIdx) {
         config.activeProjectIndex = index;
       } else if (fromIdx < config.activeProjectIndex && index >= config.activeProjectIndex) {
@@ -7067,44 +7070,104 @@ document.getElementById('btn-export-automations').addEventListener('click', func
 document.getElementById('btn-import-automations').addEventListener('click', function () {
   if (!activeProjectKey) { alert('Select a project first.'); return; }
 
-  // Step 1: Preview the file
+  // Step 1: Select file and preview
   window.electronAPI.previewImport().then(function (preview) {
     if (!preview || preview.cancelled) return;
     if (preview.error) { alert(preview.error); return; }
 
-    // Step 2: Build confirmation message
-    var msg = 'Import Summary:\n\n';
-    msg += preview.automationCount + ' automations, ' + preview.totalAgents + ' agents';
-    if (preview.totalManagers > 0) msg += ', ' + preview.totalManagers + ' managers';
-    if (preview.totalIsolated > 0) msg += '\n' + preview.totalIsolated + ' repo clone(s) will be set up';
-    msg += '\n\n';
-    preview.automations.forEach(function (a) {
-      msg += '  ' + a.name + ': ' + a.agentNames.join(', ');
-      if (a.hasManager) msg += ' + Manager';
-      if (a.hasChaining) msg += ' (chained)';
-      msg += '\n';
-    });
-    msg += '\nAutomations will be imported as PAUSED.\nProceed?';
+    // Step 2: Show preview panel in the automations list area
+    showImportPreview(preview);
+  });
+});
 
-    // Step 3: Confirm
-    if (!confirm(msg)) return;
+function showImportPreview(preview) {
+  var listEl = document.getElementById('automations-list');
+  var searchBar = document.getElementById('automations-search-bar');
+  var noProject = document.getElementById('automations-no-project');
+  if (searchBar) searchBar.style.display = 'none';
+  if (noProject) noProject.style.display = 'none';
+  listEl.innerHTML = '';
 
-    // Step 4: Import using the previewed file path
+  var panel = document.createElement('div');
+  panel.className = 'import-progress-panel';
+
+  // Header
+  var headerHtml = '<div class="import-progress-header">' +
+    '<strong>Import Preview</strong>' +
+    '<div style="font-size:11px;opacity:0.6;margin-top:4px;">' +
+    preview.automationCount + ' automations, ' + preview.totalAgents + ' agents';
+  if (preview.totalManagers > 0) headerHtml += ', ' + preview.totalManagers + ' managers';
+  headerHtml += '</div>';
+  if (preview.totalIsolated > 0) {
+    headerHtml += '<div style="font-size:11px;color:#f59e0b;margin-top:2px;">' + preview.totalIsolated + ' repo clone(s) will be set up after import</div>';
+  }
+  headerHtml += '</div>';
+
+  // Automation list
+  var listHtml = '<div class="import-progress-list">';
+  preview.automations.forEach(function (a) {
+    var badges = '';
+    if (a.hasManager) badges += '<span class="agent-badge agent-badge-chained" style="margin-left:6px;">Manager</span>';
+    if (a.hasChaining) badges += '<span class="agent-badge agent-badge-isolated" style="margin-left:4px;">Chained</span>';
+    if (a.isolatedCount > 0) badges += '<span class="agent-badge" style="margin-left:4px;background:rgba(59,130,246,0.15);color:#60a5fa;">' + a.isolatedCount + ' clone(s)</span>';
+
+    listHtml += '<div class="import-progress-row">' +
+      '<span class="import-progress-icon">&#9711;</span>' +
+      '<span class="import-progress-name">' + escapeHtml(a.name) + '</span>' +
+      '<span style="font-size:11px;opacity:0.5;">' + a.agentCount + ' agent' + (a.agentCount > 1 ? 's' : '') + '</span>' +
+      badges +
+      '</div>';
+  });
+  listHtml += '</div>';
+
+  // Footer with confirm/cancel
+  var footerHtml = '<div class="import-progress-footer" style="display:flex;gap:8px;justify-content:center;margin-top:16px;">' +
+    '<button class="modal-btn-save import-confirm-btn">Confirm Import</button>' +
+    '<button class="modal-btn-save import-cancel-btn" style="background:transparent;border:1px solid #444;">Cancel</button>' +
+    '</div>' +
+    '<div style="text-align:center;font-size:10px;opacity:0.4;margin-top:6px;">Automations will be imported as paused</div>';
+
+  panel.innerHTML = headerHtml + listHtml + footerHtml;
+  listEl.appendChild(panel);
+
+  // Cancel — go back to normal list
+  panel.querySelector('.import-cancel-btn').addEventListener('click', function () {
+    refreshAutomations();
+  });
+
+  // Confirm — run the import
+  panel.querySelector('.import-confirm-btn').addEventListener('click', function () {
+    // Disable buttons
+    panel.querySelector('.import-confirm-btn').disabled = true;
+    panel.querySelector('.import-confirm-btn').textContent = 'Importing...';
+    panel.querySelector('.import-cancel-btn').style.display = 'none';
+
     window.electronAPI.importAutomations(activeProjectKey, preview.filePath).then(function (result) {
-      if (result && result.error) { alert(result.error); return; }
-      if (!result || !result.count) return;
+      if (result && result.error) { alert(result.error); refreshAutomations(); return; }
+      if (!result || !result.count) { refreshAutomations(); return; }
 
-      refreshAutomations();
       refreshAutomationsFlyout();
 
-      // Step 5: Check if any imported automations need cloning
       var needsClone = (result.importedIds || []).filter(function (a) { return a.needsClone; });
       if (needsClone.length > 0) {
+        // Transition the preview panel into progress mode
         showImportProgress(result, needsClone);
+      } else {
+        // No clones needed — show done
+        panel.querySelector('.import-progress-header').innerHTML = '<strong>Import Complete</strong>' +
+          '<div style="font-size:11px;opacity:0.6;margin-top:4px;">' + result.count + ' automations imported (paused)</div>';
+        // Mark all rows as ready
+        panel.querySelectorAll('.import-progress-icon').forEach(function (icon) {
+          icon.innerHTML = '&#10003;';
+          icon.style.color = '#22c55e';
+        });
+        panel.querySelector('.import-confirm-btn').textContent = 'Done';
+        panel.querySelector('.import-confirm-btn').disabled = false;
+        panel.querySelector('.import-confirm-btn').onclick = function () { refreshAutomations(); };
       }
     });
   });
-});
+}
 
 function showImportProgress(importResult, needsClone) {
   var listEl = document.getElementById('automations-list');
