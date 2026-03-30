@@ -6365,23 +6365,20 @@ function createAgentCardHtml(agentIndex, agent, isCollapsed, allAgents) {
       '</div>';
   }
 
-  var isolationHtml = '';
-  if (isMulti) {
-    var isolationEnabled = agent && agent.isolation && agent.isolation.enabled;
-    var predictedPath = '';
-    if (isolationEnabled) {
-      predictedPath = agent.isolation && agent.isolation.clonePath ? agent.isolation.clonePath : '~/.claudes/agents/<project>/<agent-name>/';
-    }
-    isolationHtml = '<div class="automation-form-group">' +
-      '<label class="automation-permission-option">' +
-      '<input type="checkbox" class="agent-isolation-checkbox"' + (isolationEnabled ? ' checked' : '') + '>' +
-      '<span>Repo isolation <span class="automation-permission-hint">(clone into separate directory)</span></span>' +
-      '</label>' +
-      '<div class="agent-isolation-path" style="' + (isolationEnabled ? '' : 'display:none;') + '">' +
-      '<span class="automation-permission-hint">Clone path: ' + escapeHtml(predictedPath) + '</span>' +
-      '</div>' +
-      '</div>';
+  var isolationEnabled = agent && agent.isolation && agent.isolation.enabled;
+  var predictedPath = '';
+  if (isolationEnabled) {
+    predictedPath = agent.isolation && agent.isolation.clonePath ? agent.isolation.clonePath : '~/.claudes/agents/<project>/<agent-name>/';
   }
+  var isolationHtml = '<div class="automation-form-group">' +
+    '<label class="automation-permission-option">' +
+    '<input type="checkbox" class="agent-isolation-checkbox"' + (isolationEnabled ? ' checked' : '') + '>' +
+    '<span>Repo isolation <span class="automation-permission-hint">(clone into separate directory — prevents branch conflicts)</span></span>' +
+    '</label>' +
+    '<div class="agent-isolation-path" style="' + (isolationEnabled ? '' : 'display:none;') + '">' +
+    '<span class="automation-permission-hint">Clone path: ' + escapeHtml(predictedPath) + '</span>' +
+    '</div>' +
+    '</div>';
 
   var scheduleDisplay = runMode === 'run_after' ? 'display:none;' : '';
   var bodyStyle = isCollapsed ? 'display:none;' : '';
@@ -6455,9 +6452,11 @@ function createAgentCardHtml(agentIndex, agent, isCollapsed, allAgents) {
       '</div>' +
       '<div class="automation-form-group">' +
         '<label>Database <span class="automation-permission-hint">(optional)</span></label>' +
-        '<input type="password" class="automation-input agent-db-connection" value="' + escapeHtml(agent && agent.dbConnectionString ? agent.dbConnectionString : '') + '" placeholder="mongodb+srv://..." spellcheck="false" autocomplete="off">' +
+        '<div class="automation-db-row">' +
+          '<input type="text" class="automation-input agent-db-connection" value="' + escapeHtml(agent && agent.dbConnectionString ? agent.dbConnectionString : '') + '" placeholder="mongodb+srv://..." spellcheck="false" autocomplete="off">' +
+        '</div>' +
         '<div class="automation-permissions" style="margin-top:6px;">' +
-          '<label class="automation-permission-option"><input type="checkbox" class="agent-db-readonly"' + (agent && agent.dbReadOnly === false ? '' : ' checked') + '><span>Read-only</span></label>' +
+          '<label class="automation-permission-option"><input type="checkbox" class="agent-db-readonly"' + (agent && agent.dbReadOnly === false ? '' : ' checked') + '><span>Read-only <span class="automation-permission-hint">(agent cannot write, update, insert, or delete data)</span></span></label>' +
         '</div>' +
       '</div>' +
       '<div class="automation-form-group">' +
