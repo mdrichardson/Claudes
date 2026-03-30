@@ -1910,7 +1910,8 @@ ipcMain.handle('automations:setupManagerClone', async (event, automationId) => {
 
   const baseDir = data.agentReposBaseDir || path.join(os.homedir(), '.claudes', 'agents');
   const projectName = automation.projectPath.split(/[/\\]/).pop();
-  const clonePath = path.join(baseDir, projectName, '_manager');
+  const automationDirName = automation.name.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase();
+  const clonePath = path.join(baseDir, projectName, '_manager-' + automationDirName);
 
   if (fs.existsSync(clonePath)) {
     try {
@@ -2532,7 +2533,8 @@ async function runManager(automationId) {
       // Auto-setup clone for manager
       const baseDir = data.agentReposBaseDir || path.join(os.homedir(), '.claudes', 'agents');
       const projectName = automation.projectPath.split(/[/\\]/).pop();
-      const clonePath = path.join(baseDir, projectName, '_manager');
+      const automationDirName = automation.name.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase();
+      const clonePath = path.join(baseDir, projectName, '_manager-' + automationDirName);
 
       if (!fs.existsSync(clonePath)) {
         // Clone the repo
