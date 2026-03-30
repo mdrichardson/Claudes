@@ -94,5 +94,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onAgentStarted: (callback) => ipcRenderer.on('automations:agent-started', (_, data) => callback(data)),
   onAgentCompleted: (callback) => ipcRenderer.on('automations:agent-completed', (_, data) => callback(data)),
   onAgentOutput: (callback) => ipcRenderer.on('automations:agent-output', (_, data) => callback(data)),
-  onCloneProgress: (callback) => ipcRenderer.on('automations:clone-progress', (_, data) => callback(data))
+  onCloneProgress: (callback) => ipcRenderer.on('automations:clone-progress', (_, data) => callback(data)),
+  runManager: (automationId) => ipcRenderer.invoke('automations:runManager', automationId),
+  dismissManager: (automationId) => ipcRenderer.invoke('automations:dismissManager', automationId),
+  getManagerStatus: (automationId) => ipcRenderer.invoke('automations:getManagerStatus', automationId),
+  onManagerStarted: (callback) => ipcRenderer.on('automations:manager-started', (_, data) => callback(data)),
+  onManagerCompleted: (callback) => ipcRenderer.on('automations:manager-completed', (_, data) => callback(data)),
+  onFocusManager: (callback) => ipcRenderer.on('automations:focus-manager', (_, data) => callback(data))
 });
