@@ -5768,6 +5768,35 @@ function renderSimpleDetail(automation, agent) {
   });
 }
 
+var managerTerminals = {};
+
+function launchManagerTerminal(automation) {
+  if (!automation.manager) return;
+
+  var context = 'You are the Automation Manager for "' + automation.name + '".\n\n';
+  context += 'PIPELINE STATUS:\n';
+  automation.agents.forEach(function (ag) {
+    context += '- ' + ag.name + ': ' + (ag.lastRunStatus || 'not run') +
+      (ag.lastSummary ? ' — ' + ag.lastSummary : '') + '\n';
+  });
+  if (automation.manager.humanContext) {
+    context += '\nMANAGER INVESTIGATION FINDINGS:\n' + automation.manager.humanContext + '\n';
+  }
+  context += '\nThe user is here to help. Explain what you need and work together to resolve the issue.';
+  context += '\nTo re-run agents, ask the user to use the Re-run buttons above this terminal.';
+
+  var spawnArgs = buildSpawnArgs();
+  if (automation.manager.skipPermissions && spawnArgs.indexOf('--dangerously-skip-permissions') === -1) {
+    spawnArgs.push('--dangerously-skip-permissions');
+  }
+  spawnArgs.push('--append-system-prompt', context);
+
+  addColumn(spawnArgs, null, { title: automation.name + ' Manager' });
+
+  window.electronAPI.dismissManager(automation.id);
+  refreshAutomations();
+}
+
 function renderMultiAgentDetail(automation) {
   // Reset agent-level state so live output events don't corrupt the pipeline view
   activeAgentDetailId = null;
@@ -5785,14 +5814,45 @@ function renderMultiAgentDetail(automation) {
   else { badge.classList.add('badge-idle'); badge.textContent = automation.agents.length + ' agents'; }
 
   var metaEl = document.getElementById('automation-detail-meta');
+
+  var managerHtml = '';
+  if (automation.manager && automation.manager.enabled) {
+    var mgrStatus = automation.manager.lastRunStatus || 'idle';
+    if (automation.manager.needsHuman) {
+      managerHtml = '<button class="automation-detail-manager-btn needs-you" title="Manager needs your attention">Needs You &#9888;</button>';
+    } else if (mgrStatus === 'resolved') {
+      managerHtml = '<button class="automation-detail-manager-btn resolved" title="' + escapeHtml(automation.manager.lastSummary || 'Resolved') + '">Manager: resolved &#10003;</button>';
+    } else if (mgrStatus === 'acted') {
+      managerHtml = '<button class="automation-detail-manager-btn acted" title="Manager took action">Manager: acted</button>';
+    } else if (mgrStatus === 'running') {
+      managerHtml = '<button class="automation-detail-manager-btn running" title="Manager is investigating">Investigating...</button>';
+    } else {
+      managerHtml = '<button class="automation-detail-manager-btn idle" title="Run manager manually">Manager</button>';
+    }
+  }
+
   metaEl.innerHTML = '<button class="automation-detail-run-all" title="Run All">&#9655; Run All</button>' +
-    '<button class="automation-detail-pause-all" title="Pause">&#10074;&#10074; Pause</button>';
+    '<button class="automation-detail-pause-all" title="Pause">&#10074;&#10074; Pause</button>' +
+    managerHtml;
   metaEl.querySelector('.automation-detail-run-all').addEventListener('click', function () {
     window.electronAPI.runAutomationNow(automation.id);
   });
   metaEl.querySelector('.automation-detail-pause-all').addEventListener('click', function () {
     window.electronAPI.toggleAutomation(automation.id).then(function () { refreshAutomations(); });
   });
+
+  var mgrBtn = metaEl.querySelector('.automation-detail-manager-btn');
+  if (mgrBtn) {
+    mgrBtn.addEventListener('click', function () {
+      if (automation.manager.needsHuman) {
+        launchManagerTerminal(automation);
+      } else if (automation.manager.lastRunStatus === 'resolved' || automation.manager.lastRunStatus === 'acted') {
+        alert('Manager summary: ' + (automation.manager.lastSummary || 'No details'));
+      } else {
+        window.electronAPI.runManager(automation.id);
+      }
+    });
+  }
 
   var outputEl = document.getElementById('automation-detail-output');
   outputEl.innerHTML = '';
@@ -6065,6 +6125,26 @@ function openAutomationModal(existingAutomation) {
 
   renderModalAgentCards();
 
+  // Manager section — only show for multi-agent
+  var managerSection = document.getElementById('automation-manager-section');
+  var managerEnabled = document.getElementById('automation-manager-enabled');
+  var managerFields = document.getElementById('automation-manager-fields');
+  if (isMulti) {
+    managerSection.style.display = '';
+    var mgr = existingAutomation && existingAutomation.manager ? existingAutomation.manager : {};
+    managerEnabled.checked = mgr.enabled || false;
+    managerFields.style.display = mgr.enabled ? '' : 'none';
+    document.getElementById('automation-manager-prompt').value = mgr.prompt || '';
+    document.getElementById('automation-manager-trigger').value = mgr.triggerOn || 'failure';
+    document.getElementById('automation-manager-retries').value = mgr.maxRetries || 1;
+    document.getElementById('automation-manager-full-output').checked = mgr.includeFullOutput || false;
+    document.getElementById('automation-manager-db').value = mgr.dbConnectionString || '';
+    document.getElementById('automation-manager-db-readonly').checked = mgr.dbReadOnly !== false;
+    document.getElementById('automation-manager-skip-permissions').checked = mgr.skipPermissions || false;
+  } else {
+    managerSection.style.display = 'none';
+  }
+
   document.getElementById('automation-modal-overlay').classList.remove('hidden');
   var firstNameInput = document.querySelector('.agent-name');
   if (firstNameInput) firstNameInput.focus();
@@ -6075,6 +6155,8 @@ function closeAutomationModal() {
   document.getElementById('automation-agents-list').style.display = '';
   document.getElementById('automation-add-agent-row').style.display = '';
   document.getElementById('automation-setup-panel').style.display = 'none';
+  document.getElementById('automation-manager-section').style.display = 'none';
+  document.getElementById('automation-manager-fields').style.display = 'none';
   document.getElementById('btn-automation-save').disabled = false;
   document.getElementById('btn-automation-save').onclick = null;
   automationEditingId = null;
@@ -6559,6 +6641,26 @@ function saveAutomation() {
     return clean;
   });
 
+  // Build manager config
+  var managerConfig = null;
+  if (modalAgents.length > 1 && document.getElementById('automation-manager-enabled').checked) {
+    managerConfig = {
+      enabled: true,
+      prompt: document.getElementById('automation-manager-prompt').value.trim(),
+      triggerOn: document.getElementById('automation-manager-trigger').value,
+      includeFullOutput: document.getElementById('automation-manager-full-output').checked,
+      skipPermissions: document.getElementById('automation-manager-skip-permissions').checked,
+      dbConnectionString: document.getElementById('automation-manager-db').value.trim() || null,
+      dbReadOnly: document.getElementById('automation-manager-db-readonly').checked,
+      maxRetries: parseInt(document.getElementById('automation-manager-retries').value) || 1,
+      lastRunAt: null,
+      lastRunStatus: null,
+      lastSummary: null,
+      needsHuman: false,
+      humanContext: null
+    };
+  }
+
   if (automationEditingId) {
     // Get current automation to find agents that were removed
     window.electronAPI.getAutomationsForProject(activeProjectKey).then(function (automations) {
@@ -6573,7 +6675,7 @@ function saveAutomation() {
 
       return Promise.all(removePromises);
     }).then(function () {
-      return window.electronAPI.updateAutomation(automationEditingId, { name: automationName });
+      return window.electronAPI.updateAutomation(automationEditingId, { name: automationName, manager: managerConfig });
     }).then(function () {
       var promises = agents.map(function (ag) {
         if (ag.id && ag.id.indexOf('temp_') !== 0) {
@@ -6596,7 +6698,8 @@ function saveAutomation() {
     var config = {
       name: automationName,
       projectPath: activeProjectKey,
-      agents: agents
+      agents: agents,
+      manager: managerConfig
     };
     window.electronAPI.createAutomation(config).then(function (automation) {
       if (hasIsolated) {
@@ -6707,6 +6810,13 @@ document.getElementById('btn-add-agent').addEventListener('click', function () {
     skipPermissions: false, dbConnectionString: null, dbReadOnly: true, firstStartOnly: false
   });
   renderModalAgentCards();
+  document.getElementById('automation-manager-section').style.display = '';
+});
+document.getElementById('automation-manager-enabled').addEventListener('change', function () {
+  document.getElementById('automation-manager-fields').style.display = this.checked ? '' : 'none';
+});
+['automation-manager-prompt', 'automation-manager-db', 'automation-manager-retries'].forEach(function (id) {
+  document.getElementById(id).addEventListener('keydown', function (e) { e.stopPropagation(); });
 });
 document.getElementById('btn-refresh-automations').addEventListener('click', refreshAutomations);
 
@@ -6818,6 +6928,7 @@ function refreshAutomationsFlyout() {
         if (!auto.enabled) { statusText = 'disabled'; statusColor = '#888'; }
         else if (anyRunning) { statusText = 'running...'; }
         else if (anyError) { statusText = '\u2717 error'; statusColor = '#ef4444'; }
+        else if (auto.manager && auto.manager.needsHuman) { statusText = '\u26a0 needs you'; statusColor = '#f59e0b'; }
         else { statusText = '\u2713 ok'; }
 
         var displayName = isSimple ? auto.agents[0].name : auto.name;
@@ -6926,6 +7037,38 @@ window.electronAPI.onAgentCompleted(function (data) {
   }
 });
 
+window.electronAPI.onManagerStarted(function (data) {
+  refreshAutomations();
+  refreshAutomationsFlyout();
+  if (activeAutomationDetailId === data.automationId && activeDetailAutomation) {
+    window.electronAPI.getAutomationsForProject(activeProjectKey).then(function (automations) {
+      var auto = automations.find(function (a) { return a.id === data.automationId; });
+      if (auto) { activeDetailAutomation = auto; renderMultiAgentDetail(auto); }
+    });
+  }
+});
+
+window.electronAPI.onManagerCompleted(function (data) {
+  refreshAutomations();
+  refreshAutomationsFlyout();
+  updateAutomationSidebarBadges();
+  if (activeAutomationDetailId === data.automationId && activeDetailAutomation) {
+    window.electronAPI.getAutomationsForProject(activeProjectKey).then(function (automations) {
+      var auto = automations.find(function (a) { return a.id === data.automationId; });
+      if (auto) { activeDetailAutomation = auto; renderMultiAgentDetail(auto); }
+    });
+  }
+});
+
+window.electronAPI.onFocusManager(function (data) {
+  var tab = document.querySelector('.explorer-tab[data-tab="automations"]');
+  if (tab) tab.click();
+  window.electronAPI.getAutomationsForProject(activeProjectKey).then(function (automations) {
+    var auto = automations.find(function (a) { return a.id === data.automationId; });
+    if (auto) openAutomationDetail(auto);
+  });
+});
+
 function updateAutomationsTabIndicator() {
   if (!activeProjectKey) return;
   window.electronAPI.getAutomationsForProject(activeProjectKey).then(function (automations) {
@@ -6951,6 +7094,9 @@ function updateAutomationSidebarBadges() {
           projectsWithAttention.add(auto.projectPath.replace(/\\/g, '/'));
         }
       });
+      if (auto.manager && auto.manager.needsHuman) {
+        projectsWithAttention.add(auto.projectPath.replace(/\\/g, '/'));
+      }
     });
     var items = document.querySelectorAll('.project-item');
     items.forEach(function (item) {

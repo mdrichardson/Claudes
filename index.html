@@ -368,6 +368,55 @@
             <button type="button" id="btn-add-agent" class="automation-add-agent-btn">+ Add Agent</button>
           </div>
 
+          <!-- Manager configuration -->
+          <div id="automation-manager-section" class="automation-manager-section" style="display:none;">
+            <div class="automation-manager-header">
+              <label class="automation-permission-option">
+                <input type="checkbox" id="automation-manager-enabled">
+                <span class="automation-manager-title">Automation Manager</span>
+              </label>
+            </div>
+            <div id="automation-manager-fields" style="display:none;">
+              <div class="automation-form-group">
+                <label>Manager Prompt <span class="automation-permission-hint">(optional — appended to investigation instructions)</span></label>
+                <textarea id="automation-manager-prompt" class="automation-textarea" rows="3" placeholder="Additional instructions for the manager..." spellcheck="false"></textarea>
+              </div>
+              <div class="automation-form-group automation-manager-row">
+                <div>
+                  <label>Trigger</label>
+                  <select id="automation-manager-trigger">
+                    <option value="failure">On failure</option>
+                    <option value="always">Always</option>
+                    <option value="manual">Manual only</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Max retries</label>
+                  <input type="number" id="automation-manager-retries" min="0" max="5" value="1" style="width:50px;">
+                </div>
+              </div>
+              <div class="automation-form-group">
+                <label class="automation-permission-option">
+                  <input type="checkbox" id="automation-manager-full-output">
+                  <span>Include full agent output <span class="automation-permission-hint">(increases cost)</span></span>
+                </label>
+              </div>
+              <div class="automation-form-group">
+                <label>Database <span class="automation-permission-hint">(optional)</span></label>
+                <input type="password" id="automation-manager-db" class="automation-input" placeholder="mongodb+srv://..." spellcheck="false" autocomplete="off">
+                <div class="automation-permissions" style="margin-top:6px;">
+                  <label class="automation-permission-option"><input type="checkbox" id="automation-manager-db-readonly" checked><span>Read-only</span></label>
+                </div>
+              </div>
+              <div class="automation-form-group">
+                <label>Permissions</label>
+                <div class="automation-permissions">
+                  <label class="automation-permission-option"><input type="checkbox" id="automation-manager-skip-permissions"><span>Skip permissions</span></label>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- Clone setup progress (Stage 3) -->
           <div id="automation-setup-panel" class="automation-setup-panel" style="display:none;">
             <div class="automation-setup-header">Setting up agent repositories...</div>
