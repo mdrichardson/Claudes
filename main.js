@@ -1418,6 +1418,16 @@ ipcMain.handle('automations:runAutomationNow', (event, automationId) => {
   return true;
 });
 
+function safeRemoveDir(dirPath) {
+  try {
+    if (process.platform === 'win32') {
+      execFileSync('cmd', ['/c', 'rmdir', '/s', '/q', dirPath], { encoding: 'utf8', stdio: 'pipe', timeout: 30000 });
+    } else {
+      fs.rmSync(dirPath, { recursive: true, force: true });
+    }
+  } catch { /* ignore — directory may be partially removed or locked */ }
+}
+
 ipcMain.handle('automations:setupAgentClone', async (event, automationId, agentId) => {
   const data = readAutomations();
   const automation = data.automations.find(a => a.id === automationId);
@@ -1446,10 +1456,10 @@ ipcMain.handle('automations:setupAgentClone', async (event, automationId, agentI
         return { clonePath, status: 'reused' };
       }
       // Different remote — clean up and re-clone
-      fs.rmSync(clonePath, { recursive: true, force: true });
+      safeRemoveDir(clonePath);
     } catch {
       // Not a valid git repo — clean up and re-clone
-      fs.rmSync(clonePath, { recursive: true, force: true });
+      safeRemoveDir(clonePath);
     }
   }
 
@@ -1919,10 +1929,10 @@ ipcMain.handle('automations:setupManagerClone', async (event, automationId) => {
         return { clonePath, status: 'reused' };
       }
       // Different remote — clean up and re-clone
-      fs.rmSync(clonePath, { recursive: true, force: true });
+      safeRemoveDir(clonePath);
     } catch {
       // Not a valid git repo — clean up and re-clone
-      fs.rmSync(clonePath, { recursive: true, force: true });
+      safeRemoveDir(clonePath);
     }
   }
 

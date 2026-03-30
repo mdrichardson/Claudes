@@ -728,7 +728,10 @@ function setActiveProject(index, isStartup) {
   }
 
   saveConfig();
-  renderProjectList();
+  // Update active highlight without full re-render (avoids jitter)
+  document.querySelectorAll('.project-item').forEach(function (el, i) {
+    el.classList.toggle('active', i === index);
+  });
 
   var emptyState = columnsContainer.querySelector('.empty-state');
   if (emptyState) emptyState.remove();
