@@ -5803,7 +5803,37 @@ function launchManagerTerminal(automation) {
   refreshAutomations();
 }
 
+var viewingManagerLive = false;
+var viewingManagerAutomationId = null;
+
+function showManagerLiveOutput(automation) {
+  viewingAgentInPipeline = true;
+  viewingManagerLive = true;
+  viewingManagerAutomationId = automation.id;
+  var outputHeader = document.querySelector('.automation-detail-output-header');
+  if (outputHeader) outputHeader.style.display = '';
+  document.getElementById('automation-detail-name').textContent = automation.name + ' — Manager';
+  document.getElementById('automation-detail-run-select').style.display = 'none';
+  document.getElementById('automation-detail-summary').style.display = 'none';
+  document.getElementById('automation-detail-attention').style.display = 'none';
+
+  var outputEl = document.getElementById('automation-detail-output');
+  outputEl.style.background = '';
+  outputEl.style.fontFamily = '';
+  outputEl.style.whiteSpace = '';
+  outputEl.innerHTML = '<div class="automation-processing-indicator">Manager is investigating...</div>';
+
+  window.electronAPI.getManagerLiveOutput(automation.id).then(function (text) {
+    if (text) { outputEl.textContent = text; outputEl.scrollTop = outputEl.scrollHeight; }
+  });
+
+  var metaEl = document.getElementById('automation-detail-meta');
+  metaEl.textContent = 'Manager is running — live output';
+}
+
 function showManagerOutput(automation) {
+  viewingManagerLive = false;
+  viewingManagerAutomationId = null;
   viewingAgentInPipeline = true; // So back button returns to pipeline
   var outputHeader = document.querySelector('.automation-detail-output-header');
   if (outputHeader) outputHeader.style.display = '';
@@ -5855,8 +5885,10 @@ function showManagerOutput(automation) {
 }
 
 function renderMultiAgentDetail(automation) {
-  // Reset agent-level state so live output events don't corrupt the pipeline view
+  // Reset state so live output events don't corrupt the pipeline view
   activeAgentDetailId = null;
+  viewingManagerLive = false;
+  viewingManagerAutomationId = null;
   agentDetailViewingLive = false;
   viewingAgentInPipeline = false;
 
@@ -5868,7 +5900,12 @@ function renderMultiAgentDetail(automation) {
   badge.className = 'automation-status-badge';
   var anyRunning = automation.agents.some(function (ag) { return !!ag.currentRunStartedAt; });
   if (anyRunning) { badge.classList.add('badge-running'); badge.textContent = 'running...'; }
-  else { badge.classList.add('badge-idle'); badge.textContent = automation.agents.length + ' agents'; }
+  else {
+    badge.classList.add('badge-idle');
+    var badgeLabel = automation.agents.length + ' agents';
+    if (automation.manager && automation.manager.enabled) badgeLabel += ' + manager';
+    badge.textContent = badgeLabel;
+  }
 
   var metaEl = document.getElementById('automation-detail-meta');
 
@@ -5903,8 +5940,9 @@ function renderMultiAgentDetail(automation) {
     mgrBtn.addEventListener('click', function () {
       if (automation.manager.needsHuman) {
         launchManagerTerminal(automation);
+      } else if (automation.manager.lastRunStatus === 'running') {
+        showManagerLiveOutput(automation);
       } else if (automation.manager.lastRunStatus === 'resolved' || automation.manager.lastRunStatus === 'acted' || automation.manager.lastRunStatus === 'error' || automation.manager.lastRunStatus === 'escalated') {
-        // Show manager output
         showManagerOutput(automation);
       } else {
         window.electronAPI.runManager(automation.id);
@@ -6058,6 +6096,8 @@ function closeAutomationDetail() {
   activeAgentDetailId = null;
   agentDetailViewingLive = false;
   viewingAgentInPipeline = false;
+  viewingManagerLive = false;
+  viewingManagerAutomationId = null;
   document.getElementById('automation-detail-panel').style.display = 'none';
   document.getElementById('automations-list').style.display = '';
   document.getElementById('automation-detail-run-select').style.display = '';
@@ -7148,6 +7188,18 @@ window.electronAPI.onManagerCompleted(function (data) {
       var auto = automations.find(function (a) { return a.id === data.automationId; });
       if (auto) { activeDetailAutomation = auto; renderMultiAgentDetail(auto); }
     });
+  }
+});
+
+window.electronAPI.onManagerOutput(function (data) {
+  if (viewingManagerLive && viewingManagerAutomationId === data.automationId) {
+    var outputEl = document.getElementById('automation-detail-output');
+    if (outputEl) {
+      var indicator = outputEl.querySelector('.automation-processing-indicator');
+      if (indicator) outputEl.textContent = '';
+      outputEl.textContent += data.chunk;
+      outputEl.scrollTop = outputEl.scrollHeight;
+    }
   }
 });
 

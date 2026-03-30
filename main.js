@@ -1728,6 +1728,12 @@ ipcMain.handle('automations:getManagerHistory', (event, automationId, count) => 
   }
 });
 
+ipcMain.handle('automations:getManagerLiveOutput', (event, automationId) => {
+  const chunks = managerLiveOutputBuffers.get(automationId);
+  if (chunks) return chunks.join('');
+  return null;
+});
+
 ipcMain.handle('automations:setupManagerClone', async (event, automationId) => {
   const data = readAutomations();
   const automation = data.automations.find(a => a.id === automationId);
@@ -1789,6 +1795,7 @@ const runningAgents = new Map(); // 'automationId:agentId' -> child process
 const agentQueue = []; // {automationId, agentId} objects waiting for a slot
 const runningManagers = new Map(); // automationId -> child process
 const managerRetryCounters = new Map(); // automationId -> number of retries this cycle
+const managerLiveOutputBuffers = new Map(); // automationId -> string[] chunks
 
 const AGENT_PROMPT_SUFFIX = '\n\nEnd your response with a JSON block wrapped in :::loop-result markers like this:\n:::loop-result\n{"summary": "Brief one-line summary", "attentionItems": [{"summary": "Short description", "detail": "Full context"}]}\n:::loop-result\nIf there are no issues, use an empty attentionItems array.';
 
@@ -2459,6 +2466,7 @@ async function runManager(automationId) {
   });
 
   runningManagers.set(automationId, child);
+  managerLiveOutputBuffers.set(automationId, textChunks);
 
   let streamBuffer = '';
   child.stdout.on('data', (chunk) => {
@@ -2479,15 +2487,22 @@ async function runManager(automationId) {
           if (typeof evt.result === 'string') text = evt.result;
           else if (Array.isArray(evt.result)) evt.result.forEach(block => { if (block.type === 'text') text += block.text; });
         }
-        if (text) textChunks.push(text);
+        if (text) {
+          textChunks.push(text);
+          if (mainWindow) mainWindow.webContents.send('automations:manager-output', { automationId, chunk: text });
+        }
       } catch { /* skip */ }
     }
   });
 
-  child.stderr.on('data', (chunk) => { textChunks.push(chunk.toString()); });
+  child.stderr.on('data', (chunk) => {
+    textChunks.push(chunk.toString());
+    if (mainWindow) mainWindow.webContents.send('automations:manager-output', { automationId, chunk: chunk.toString() });
+  });
 
   child.on('close', (exitCode) => {
     runningManagers.delete(automationId);
+    managerLiveOutputBuffers.delete(automationId);
     if (mcpConfigPath) try { fs.unlinkSync(mcpConfigPath); } catch { /* ignore */ }
 
     const completedAt = new Date().toISOString();

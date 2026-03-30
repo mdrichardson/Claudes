@@ -4351,14 +4351,15 @@ html, body {
 }
 
 .automation-setup-log {
-  background: rgba(0,0,0,0.3);
+  background: var(--bg-main);
+  border: 1px solid var(--border-primary);
   border-radius: 4px;
   padding: 8px;
   font-size: 11px;
   max-height: 200px;
   overflow-y: auto;
   margin-top: 8px;
-  color: #888;
+  color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-all;
 }
