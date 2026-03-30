@@ -6206,6 +6206,32 @@ function createAgentCardHtml(agentIndex, agent, isCollapsed, allAgents) {
   return html;
 }
 
+function updateCardHeaderBadges(card, agentIndex) {
+  var header = card.querySelector('.agent-card-header');
+  if (!header) return;
+  var ag = modalAgents[agentIndex];
+  if (!ag) return;
+  // Remove existing badges
+  header.querySelectorAll('.agent-badge').forEach(function (b) { b.remove(); });
+  // Insert new badges after the title
+  var title = header.querySelector('.agent-card-title');
+  if (!title) return;
+  var frag = document.createDocumentFragment();
+  if (ag.runMode === 'run_after') {
+    var b1 = document.createElement('span');
+    b1.className = 'agent-badge agent-badge-chained';
+    b1.textContent = 'Chained';
+    frag.appendChild(b1);
+  }
+  if (ag.isolation && ag.isolation.enabled) {
+    var b2 = document.createElement('span');
+    b2.className = 'agent-badge agent-badge-isolated';
+    b2.textContent = 'Isolated';
+    frag.appendChild(b2);
+  }
+  title.after(frag);
+}
+
 function bindAgentCardEvents(card, agentIndex) {
   var header = card.querySelector('.agent-card-header');
   if (header) {
@@ -6278,6 +6304,7 @@ function bindAgentCardEvents(card, agentIndex) {
       var schedSection = card.querySelector('.agent-schedule-section');
       if (runAfterGroup) runAfterGroup.style.display = this.value === 'run_after' ? '' : 'none';
       if (schedSection) schedSection.style.display = this.value === 'run_after' ? 'none' : '';
+      updateCardHeaderBadges(card, agentIndex);
       // When switching to run_after, update chip disabled states
       if (this.value === 'run_after') {
         setTimeout(updateRunAfterChipStates, 0);
@@ -6305,6 +6332,7 @@ function bindAgentCardEvents(card, agentIndex) {
       modalAgents[agentIndex].isolation.enabled = this.checked;
       var pathEl = card.querySelector('.agent-isolation-path');
       if (pathEl) pathEl.style.display = this.checked ? '' : 'none';
+      updateCardHeaderBadges(card, agentIndex);
     });
   }
 
