@@ -99,6 +99,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   dismissManager: (automationId) => ipcRenderer.invoke('automations:dismissManager', automationId),
   getManagerStatus: (automationId) => ipcRenderer.invoke('automations:getManagerStatus', automationId),
   getManagerHistory: (automationId, count) => ipcRenderer.invoke('automations:getManagerHistory', automationId, count),
+  setupManagerClone: (automationId) => ipcRenderer.invoke('automations:setupManagerClone', automationId),
   onManagerStarted: (callback) => ipcRenderer.on('automations:manager-started', (_, data) => callback(data)),
   onManagerCompleted: (callback) => ipcRenderer.on('automations:manager-completed', (_, data) => callback(data)),
   onFocusManager: (callback) => ipcRenderer.on('automations:focus-manager', (_, data) => callback(data))

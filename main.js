@@ -1728,6 +1728,60 @@ ipcMain.handle('automations:getManagerHistory', (event, automationId, count) => 
   }
 });
 
+ipcMain.handle('automations:setupManagerClone', async (event, automationId) => {
+  const data = readAutomations();
+  const automation = data.automations.find(a => a.id === automationId);
+  if (!automation || !automation.manager) return { error: 'Automation or manager not found' };
+  if (!automation.manager.isolation || !automation.manager.isolation.enabled) return { error: 'Manager isolation not enabled' };
+
+  const baseDir = data.agentReposBaseDir || path.join(os.homedir(), '.claudes', 'agents');
+  const projectName = automation.projectPath.split(/[/\\]/).pop();
+  const clonePath = path.join(baseDir, projectName, '_manager');
+
+  if (fs.existsSync(clonePath)) {
+    const freshData = readAutomations();
+    const freshAuto = freshData.automations.find(a => a.id === automationId);
+    if (freshAuto && freshAuto.manager) {
+      freshAuto.manager.isolation.clonePath = clonePath;
+      writeAutomations(freshData);
+    }
+    return { clonePath, status: 'reused' };
+  }
+
+  let remoteUrl = '';
+  try {
+    remoteUrl = execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: automation.projectPath, encoding: 'utf8' }).trim();
+  } catch {
+    remoteUrl = automation.projectPath;
+  }
+
+  fs.mkdirSync(path.dirname(clonePath), { recursive: true });
+
+  return new Promise((resolve) => {
+    const child = spawn('git', ['clone', remoteUrl, clonePath], { stdio: ['ignore', 'pipe', 'pipe'] });
+    child.stdout.on('data', (chunk) => {
+      if (mainWindow) mainWindow.webContents.send('automations:clone-progress', { automationId, agentId: '_manager', line: chunk.toString() });
+    });
+    child.stderr.on('data', (chunk) => {
+      if (mainWindow) mainWindow.webContents.send('automations:clone-progress', { automationId, agentId: '_manager', line: chunk.toString() });
+    });
+    child.on('close', (exitCode) => {
+      if (exitCode === 0) {
+        const freshData = readAutomations();
+        const freshAuto = freshData.automations.find(a => a.id === automationId);
+        if (freshAuto && freshAuto.manager) {
+          freshAuto.manager.isolation.clonePath = clonePath;
+          writeAutomations(freshData);
+        }
+        resolve({ clonePath, status: 'cloned' });
+      } else {
+        resolve({ error: 'git clone failed with exit code ' + exitCode });
+      }
+    });
+    child.on('error', (err) => { resolve({ error: 'git clone error: ' + err.message }); });
+  });
+});
+
 // --- Automations Scheduler & Execution ---
 
 const agentLiveOutputBuffers = new Map(); // 'automationId:agentId' -> string[] chunks

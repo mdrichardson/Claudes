@@ -5713,6 +5713,12 @@ function renderSimpleDetail(automation, agent) {
   var outputHeader = document.querySelector('.automation-detail-output-header');
   if (outputHeader) outputHeader.style.display = '';
 
+  // Reset output element styles (pipeline view changes these)
+  var outputEl = document.getElementById('automation-detail-output');
+  outputEl.style.background = '';
+  outputEl.style.fontFamily = '';
+  outputEl.style.whiteSpace = '';
+
   document.getElementById('automation-detail-name').textContent = agent.name;
   var badge = document.getElementById('automation-detail-status-badge');
   badge.className = 'automation-status-badge';
@@ -5908,6 +5914,9 @@ function renderMultiAgentDetail(automation) {
 
   var outputEl = document.getElementById('automation-detail-output');
   outputEl.innerHTML = '';
+  outputEl.style.background = 'transparent';
+  outputEl.style.fontFamily = 'inherit';
+  outputEl.style.whiteSpace = 'normal';
   document.getElementById('automation-detail-summary').style.display = 'none';
   document.getElementById('automation-detail-attention').style.display = 'none';
   document.getElementById('automation-detail-run-select').style.display = 'none';
@@ -6687,6 +6696,8 @@ function saveAutomation() {
   }
 
   var hasIsolated = modalAgents.some(function (ag) { return ag.isolation && ag.isolation.enabled; });
+  var hasManagerIsolation = managerConfig && managerConfig.isolation && managerConfig.isolation.enabled;
+  var needsCloneSetup = hasIsolated || hasManagerIsolation;
 
   var agents = modalAgents.map(function (ag) {
     var clean = Object.assign({}, ag);
@@ -6740,7 +6751,7 @@ function saveAutomation() {
       });
       return Promise.all(promises);
     }).then(function () {
-      if (hasIsolated) {
+      if (needsCloneSetup) {
         startCloneSetup(automationEditingId);
       } else {
         closeAutomationModal();
@@ -6768,6 +6779,23 @@ function saveAutomation() {
   }
 }
 
+function finishCloneSetup() {
+  document.getElementById('btn-automation-save').textContent = 'Done';
+  document.getElementById('btn-automation-save').disabled = false;
+  document.getElementById('btn-automation-save').onclick = function () {
+    var autoId = automationEditingId;
+    closeAutomationModal();
+    refreshAutomations();
+    refreshAutomationsFlyout();
+    if (autoId) {
+      window.electronAPI.getAutomationsForProject(activeProjectKey).then(function (automations) {
+        var auto = automations.find(function (a) { return a.id === autoId; });
+        if (auto) openAutomationDetail(auto);
+      });
+    }
+  };
+}
+
 function startCloneSetup(automationId) {
   var setupPanel = document.getElementById('automation-setup-panel');
   var setupAgents = document.getElementById('automation-setup-agents');
@@ -6787,6 +6815,7 @@ function startCloneSetup(automationId) {
     if (!automation) return;
 
     var isolatedAgents = automation.agents.filter(function (ag) { return ag.isolation && ag.isolation.enabled; });
+    var hasManagerIso = automation.manager && automation.manager.isolation && automation.manager.isolation.enabled;
     setupAgents.innerHTML = '';
     isolatedAgents.forEach(function (ag) {
       var row = document.createElement('div');
@@ -6795,26 +6824,34 @@ function startCloneSetup(automationId) {
       row.innerHTML = '<span class="automation-setup-agent-icon">&#9711;</span> ' + escapeHtml(ag.name);
       setupAgents.appendChild(row);
     });
+    if (hasManagerIso) {
+      var mgrRow = document.createElement('div');
+      mgrRow.className = 'automation-setup-agent-row';
+      mgrRow.id = 'setup-agent-_manager';
+      mgrRow.innerHTML = '<span class="automation-setup-agent-icon">&#9711;</span> Manager';
+      setupAgents.appendChild(mgrRow);
+    }
 
     activeCloneAutomationId = automationId;
 
     var cloneNext = function (index) {
       if (index >= isolatedAgents.length) {
-        document.getElementById('btn-automation-save').textContent = 'Done';
-        document.getElementById('btn-automation-save').disabled = false;
-        document.getElementById('btn-automation-save').onclick = function () {
-          var autoId = automationEditingId;
-          closeAutomationModal();
-          refreshAutomations();
-          refreshAutomationsFlyout();
-          // Navigate to detail view
-          if (autoId) {
-            window.electronAPI.getAutomationsForProject(activeProjectKey).then(function (automations) {
-              var auto = automations.find(function (a) { return a.id === autoId; });
-              if (auto) openAutomationDetail(auto);
-            });
-          }
-        };
+        // After all agents, clone manager if needed
+        if (hasManagerIso) {
+          var mgrRowEl = document.getElementById('setup-agent-_manager');
+          if (mgrRowEl) mgrRowEl.querySelector('.automation-setup-agent-icon').innerHTML = '&#8987;';
+          window.electronAPI.setupManagerClone(automationId).then(function (result) {
+            if (mgrRowEl) {
+              mgrRowEl.querySelector('.automation-setup-agent-icon').innerHTML = result.error ? '&#10007;' : '&#10003;';
+              if (result.error) mgrRowEl.style.color = '#ef4444';
+              else mgrRowEl.style.color = '#22c55e';
+            }
+            if (result.error) setupLog.textContent += '\nManager clone ERROR: ' + result.error + '\n';
+            finishCloneSetup();
+          });
+          return; // Don't call finishCloneSetup yet — wait for manager clone
+        }
+        finishCloneSetup();
         return;
       }
       var ag = isolatedAgents[index];
