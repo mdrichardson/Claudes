@@ -1316,6 +1316,30 @@ ipcMain.handle('automations:delete', (event, automationId) => {
   return true;
 });
 
+ipcMain.handle('automations:deleteAllForProject', (event, projectPath) => {
+  const data = readAutomations();
+  const normalized = projectPath.replace(/\\/g, '/');
+  const toDelete = data.automations.filter(a => a.projectPath.replace(/\\/g, '/') === normalized);
+
+  // Clean up clone directories and run history
+  toDelete.forEach(automation => {
+    automation.agents.forEach(agent => {
+      if (agent.isolation && agent.isolation.enabled && agent.isolation.clonePath) {
+        try { fs.rmSync(agent.isolation.clonePath, { recursive: true, force: true }); } catch { /* ignore */ }
+      }
+    });
+    if (automation.manager && automation.manager.isolation && automation.manager.isolation.clonePath) {
+      try { fs.rmSync(automation.manager.isolation.clonePath, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+    const runDir = path.join(AUTOMATIONS_RUNS_DIR, automation.id);
+    try { fs.rmSync(runDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  data.automations = data.automations.filter(a => a.projectPath.replace(/\\/g, '/') !== normalized);
+  writeAutomations(data);
+  return { deleted: toDelete.length };
+});
+
 ipcMain.handle('automations:toggle', (event, automationId) => {
   const data = readAutomations();
   const automation = data.automations.find(a => a.id === automationId);
@@ -1707,7 +1731,7 @@ ipcMain.handle('automations:import', (event, projectPath) => {
         projectPath: projectPath,
         agents: agents,
         manager: managerConfig,
-        enabled: true,
+        enabled: false,
         createdAt: new Date().toISOString()
       });
       count++;

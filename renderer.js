@@ -603,8 +603,65 @@ function renderProjectList() {
       removeProject(index);
     });
 
+    if (project.hidden) {
+      item.style.opacity = '0.4';
+    }
+
     item.addEventListener('click', function () {
       setActiveProject(index, false);
+    });
+
+    item.addEventListener('contextmenu', function (e) {
+      e.preventDefault();
+      var menu = document.getElementById('project-context-menu');
+      if (!menu) {
+        menu = document.createElement('div');
+        menu.id = 'project-context-menu';
+        menu.className = 'project-context-menu';
+        document.body.appendChild(menu);
+      }
+      var projIndex = index;
+      var isHidden = project.hidden || false;
+      menu.innerHTML = '<div class="project-context-item" data-action="toggle-hide">' + (isHidden ? 'Show Project' : 'Hide Project') + '</div>' +
+        (projIndex > 0 ? '<div class="project-context-item" data-action="move-up">Move Up</div>' : '') +
+        (projIndex < config.projects.length - 1 ? '<div class="project-context-item" data-action="move-down">Move Down</div>' : '');
+      menu.style.left = e.clientX + 'px';
+      menu.style.top = e.clientY + 'px';
+      menu.style.display = 'block';
+
+      menu.onclick = function (ev) {
+        var action = ev.target.dataset.action;
+        if (action === 'toggle-hide') {
+          config.projects[projIndex].hidden = !config.projects[projIndex].hidden;
+          window.electronAPI.saveProjects(config);
+          renderProjectList();
+        } else if (action === 'move-up' && projIndex > 0) {
+          var temp = config.projects[projIndex];
+          config.projects[projIndex] = config.projects[projIndex - 1];
+          config.projects[projIndex - 1] = temp;
+          if (config.activeProjectIndex === projIndex) config.activeProjectIndex = projIndex - 1;
+          else if (config.activeProjectIndex === projIndex - 1) config.activeProjectIndex = projIndex;
+          window.electronAPI.saveProjects(config);
+          renderProjectList();
+        } else if (action === 'move-down' && projIndex < config.projects.length - 1) {
+          var temp = config.projects[projIndex];
+          config.projects[projIndex] = config.projects[projIndex + 1];
+          config.projects[projIndex + 1] = temp;
+          if (config.activeProjectIndex === projIndex) config.activeProjectIndex = projIndex + 1;
+          else if (config.activeProjectIndex === projIndex + 1) config.activeProjectIndex = projIndex;
+          window.electronAPI.saveProjects(config);
+          renderProjectList();
+        }
+        menu.style.display = 'none';
+      };
+
+      // Close on click outside
+      setTimeout(function () {
+        document.addEventListener('click', function closeMenu() {
+          menu.style.display = 'none';
+          document.removeEventListener('click', closeMenu);
+        });
+      }, 0);
     });
 
     rightSide.appendChild(removeBtn);
@@ -6988,6 +7045,16 @@ document.getElementById('btn-import-automations').addEventListener('click', func
   window.electronAPI.importAutomations(activeProjectKey).then(function (result) {
     if (result && result.error) { alert(result.error); return; }
     if (result && result.count) refreshAutomations();
+  });
+});
+
+document.getElementById('btn-clear-automations').addEventListener('click', function () {
+  if (!activeProjectKey) { alert('Select a project first.'); return; }
+  if (automationsForProject.length === 0) { alert('No automations to clear.'); return; }
+  if (!confirm('Delete ALL ' + automationsForProject.length + ' automations for this project? This cannot be undone.')) return;
+  window.electronAPI.deleteAllAutomations(activeProjectKey).then(function (result) {
+    if (result && result.deleted) refreshAutomations();
+    refreshAutomationsFlyout();
   });
 });
 

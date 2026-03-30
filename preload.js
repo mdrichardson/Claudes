@@ -89,6 +89,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   exportAutomations: (projectPath) => ipcRenderer.invoke('automations:export', projectPath),
   exportAutomation: (automationId) => ipcRenderer.invoke('automations:exportOne', automationId),
   importAutomations: (projectPath) => ipcRenderer.invoke('automations:import', projectPath),
+  deleteAllAutomations: (projectPath) => ipcRenderer.invoke('automations:deleteAllForProject', projectPath),
   getAutomationSettings: () => ipcRenderer.invoke('automations:getSettings'),
   updateAutomationSettings: (settings) => ipcRenderer.invoke('automations:updateSettings', settings),
   onAgentStarted: (callback) => ipcRenderer.on('automations:agent-started', (_, data) => callback(data)),
