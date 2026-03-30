@@ -3643,13 +3643,13 @@ html, body {
 }
 
 .automation-detail-meta {
-  padding: 8px 10px;
+  padding: 6px 10px;
   font-size: 11px;
   color: var(--text-secondary);
   border-bottom: 1px solid var(--border-primary);
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 6px;
+  flex-wrap: nowrap;
+  gap: 4px;
   align-items: center;
 }
 
@@ -4464,11 +4464,11 @@ html, body {
   background: rgba(255,255,255,0.06);
   border: 1px solid #444;
   color: #ccc;
-  padding: 3px 10px;
+  padding: 2px 8px;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: 11px;
   cursor: pointer;
-  margin-right: 6px;
+  white-space: nowrap;
 }
 
 .automation-detail-run-all:hover { border-color: #22c55e; color: #22c55e; }
@@ -4515,11 +4515,12 @@ html, body {
   background: rgba(255,255,255,0.06);
   border: 1px solid #444;
   color: #ccc;
-  padding: 3px 10px;
+  padding: 2px 8px;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: 11px;
   cursor: pointer;
-  margin-left: 6px;
+  margin-left: auto;
+  white-space: nowrap;
 }
 
 .automation-detail-manager-btn.needs-you {
