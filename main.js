@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, clipboard, nativeTheme, shell, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, clipboard, nativeTheme, shell, Tray, Menu, nativeImage, Notification } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -1217,7 +1217,7 @@ ipcMain.handle('automations:update', (event, automationId, updates) => {
   const data = readAutomations();
   const automation = data.automations.find(a => a.id === automationId);
   if (!automation) return null;
-  const safeFields = ['name', 'enabled'];
+  const safeFields = ['name', 'enabled', 'manager'];
   safeFields.forEach(field => {
     if (updates[field] !== undefined) automation[field] = updates[field];
   });
@@ -1671,13 +1671,73 @@ ipcMain.handle('automations:updateSettings', (event, settings) => {
   return true;
 });
 
+ipcMain.handle('automations:runManager', (event, automationId) => {
+  managerRetryCounters.delete(automationId); // Reset retries for manual trigger
+  runManager(automationId);
+  return true;
+});
+
+ipcMain.handle('automations:dismissManager', (event, automationId) => {
+  const data = readAutomations();
+  const automation = data.automations.find(a => a.id === automationId);
+  if (!automation || !automation.manager) return false;
+  automation.manager.needsHuman = false;
+  automation.manager.humanContext = null;
+  writeAutomations(data);
+  if (mainWindow) mainWindow.webContents.send('automations:manager-completed', {
+    automationId, status: 'dismissed', needsHuman: false
+  });
+  return true;
+});
+
+ipcMain.handle('automations:getManagerStatus', (event, automationId) => {
+  const data = readAutomations();
+  const automation = data.automations.find(a => a.id === automationId);
+  if (!automation || !automation.manager) return { enabled: false };
+  return {
+    enabled: automation.manager.enabled,
+    lastRunStatus: automation.manager.lastRunStatus,
+    lastSummary: automation.manager.lastSummary,
+    needsHuman: automation.manager.needsHuman,
+    humanContext: automation.manager.humanContext,
+    running: runningManagers.has(automationId)
+  };
+});
+
 // --- Automations Scheduler & Execution ---
 
 const agentLiveOutputBuffers = new Map(); // 'automationId:agentId' -> string[] chunks
 const runningAgents = new Map(); // 'automationId:agentId' -> child process
 const agentQueue = []; // {automationId, agentId} objects waiting for a slot
+const runningManagers = new Map(); // automationId -> child process
+const managerRetryCounters = new Map(); // automationId -> number of retries this cycle
 
 const AGENT_PROMPT_SUFFIX = '\n\nEnd your response with a JSON block wrapped in :::loop-result markers like this:\n:::loop-result\n{"summary": "Brief one-line summary", "attentionItems": [{"summary": "Short description", "detail": "Full context"}]}\n:::loop-result\nIf there are no issues, use an empty attentionItems array.';
+
+const MANAGER_PROMPT_TEMPLATE = `You are the Automation Manager for "{name}".
+
+A pipeline run has just completed. Your job is to:
+1. Review all agent results below
+2. Identify any failures or issues
+3. Investigate root causes using the codebase and database
+4. Take corrective action if possible (re-running agents, etc.)
+5. Escalate to the human ONLY if you cannot resolve the issue
+
+{pipelineReport}
+
+RULES:
+- If an agent failed due to a transient error (timeout, network issue), re-run it
+- If an agent failed due to a code or data issue, investigate the root cause
+- Do NOT re-run an agent more than {maxRetries} time(s) — you have used {retriesUsed} retries so far
+- If you cannot resolve the issue, set needsHuman to true and provide clear context for the human
+- Always explain what you found and what you did
+
+{customPrompt}
+
+End your response with a JSON block wrapped in :::manager-result markers like this:
+:::manager-result
+{"summary": "Brief description", "attentionItems": [{"summary": "...", "detail": "..."}], "actions": [{"type": "rerun_agent", "agentId": "agent_id_here"} or {"type": "rerun_all"} or {"type": "report"}], "needsHuman": false, "humanContext": "Only if needsHuman is true"}
+:::manager-result`;
 
 function findClaudePath() {
   try {
@@ -1719,6 +1779,86 @@ function parseAgentResult(output) {
     }
   });
   return result;
+}
+
+function parseManagerResult(output) {
+  const result = { summary: '', attentionItems: [], actions: [], needsHuman: false, humanContext: null };
+  const match = output.match(/:::manager-result\s*\n([\s\S]*?)\n\s*:::manager-result/);
+  if (match) {
+    try {
+      const parsed = JSON.parse(match[1]);
+      result.summary = parsed.summary || '';
+      result.attentionItems = parsed.attentionItems || [];
+      result.actions = parsed.actions || [];
+      result.needsHuman = !!parsed.needsHuman;
+      result.humanContext = parsed.humanContext || null;
+      return result;
+    } catch { /* fall through */ }
+  }
+  // Fallback: treat entire output as summary, assume needs human
+  const lines = output.trim().split('\n');
+  result.summary = lines[lines.length - 1].substring(0, 200);
+  result.needsHuman = true;
+  result.humanContext = 'Manager did not produce structured output. Please review the raw output.';
+  return result;
+}
+
+function buildPipelineReport(automation, includeFullOutput) {
+  let report = 'PIPELINE STRUCTURE:\n';
+  automation.agents.forEach((ag, i) => {
+    const mode = ag.runMode === 'run_after' ? 'runs after ' + (ag.runAfter || []).map(id => {
+      const up = automation.agents.find(a => a.id === id);
+      return up ? up.name : id;
+    }).join(', ') : 'independent';
+    report += '- Agent ' + (i + 1) + ': "' + ag.name + '" (' + mode + (ag.isolation && ag.isolation.enabled ? ', isolated' : '') + ')\n';
+  });
+  report += '\nAGENT RESULTS:\n';
+  automation.agents.forEach(ag => {
+    report += '\n--- ' + ag.name + ' — ' + (ag.lastRunStatus || 'not run').toUpperCase() + ' ---\n';
+    if (ag.lastSummary) report += 'Summary: ' + ag.lastSummary + '\n';
+    if (ag.lastError) report += 'Error: ' + ag.lastError + '\n';
+    if (ag.lastAttentionItems && ag.lastAttentionItems.length > 0) {
+      report += 'Attention items:\n';
+      ag.lastAttentionItems.forEach(item => {
+        report += '  - ' + item.summary + (item.detail ? ': ' + item.detail : '') + '\n';
+      });
+    }
+    if (includeFullOutput) {
+      const history = getAgentHistory(automation.id, ag.id, 1);
+      if (history.length > 0) {
+        const dir = path.join(AUTOMATIONS_RUNS_DIR, automation.id, ag.id);
+        try {
+          const files = fs.readdirSync(dir).filter(f => f.endsWith('.json')).sort().reverse();
+          if (files.length > 0) {
+            const runData = JSON.parse(fs.readFileSync(path.join(dir, files[0]), 'utf8'));
+            if (runData.output) report += 'Full output:\n' + runData.output.substring(0, 10000) + '\n';
+          }
+        } catch { /* ignore */ }
+      }
+    }
+  });
+  const completed = automation.agents.filter(ag => ag.lastRunStatus === 'completed').length;
+  const errored = automation.agents.filter(ag => ag.lastRunStatus === 'error').length;
+  const skipped = automation.agents.filter(ag => ag.lastRunStatus === 'skipped').length;
+  report += '\nOVERALL STATUS: ' + completed + ' completed, ' + errored + ' error, ' + skipped + ' skipped\n';
+  return report;
+}
+
+function sendManagerNotification(automation, summary) {
+  if (mainWindow && mainWindow.isFocused()) return;
+  const notif = new Notification({
+    title: 'Automation Manager — ' + automation.name,
+    body: (summary || '').substring(0, 100),
+    icon: path.join(__dirname, 'icon.png')
+  });
+  notif.on('click', () => {
+    if (mainWindow) {
+      mainWindow.show();
+      mainWindow.focus();
+      mainWindow.webContents.send('automations:focus-manager', { automationId: automation.id });
+    }
+  });
+  notif.show();
 }
 
 function shouldRunAgent(agent, now) {
@@ -2009,6 +2149,9 @@ async function runAgent(automationId, agentId) {
 
       // Trigger dependent agents
       triggerDependentAgents(automationId, agentId, runData.status, freshData);
+
+      // Check if pipeline is fully complete — trigger manager if configured
+      checkPipelineComplete(automationId);
     }
 
     // Notify renderer
@@ -2104,6 +2247,263 @@ function triggerDependentAgents(automationId, completedAgentId, completedStatus,
     // All upstream done and either all succeeded or runOnUpstreamFailure is true
     runAgent(automationId, agent.id);
   });
+}
+
+async function runManager(automationId) {
+  let data = readAutomations();
+  const automation = data.automations.find(a => a.id === automationId);
+  if (!automation) return;
+  if (!automation.manager || !automation.manager.enabled) return;
+  if (runningManagers.has(automationId)) return;
+
+  const manager = automation.manager;
+  const cwd = automation.projectPath;
+  if (!fs.existsSync(cwd)) return;
+
+  // Build the prompt
+  const pipelineReport = buildPipelineReport(automation, manager.includeFullOutput);
+  const retriesUsed = managerRetryCounters.get(automationId) || 0;
+  let prompt = MANAGER_PROMPT_TEMPLATE
+    .replace('{name}', automation.name)
+    .replace('{pipelineReport}', pipelineReport)
+    .replace('{maxRetries}', String(manager.maxRetries || 1))
+    .replace('{retriesUsed}', String(retriesUsed))
+    .replace('{customPrompt}', manager.prompt || '');
+
+  // Update state
+  const freshData = readAutomations();
+  const freshAuto = freshData.automations.find(a => a.id === automationId);
+  if (freshAuto && freshAuto.manager) {
+    freshAuto.manager.lastRunAt = new Date().toISOString();
+    freshAuto.manager.lastRunStatus = 'running';
+    freshAuto.manager.needsHuman = false;
+    freshAuto.manager.humanContext = null;
+    writeAutomations(freshData);
+  }
+
+  if (mainWindow) mainWindow.webContents.send('automations:manager-started', { automationId });
+
+  const startedAt = new Date().toISOString();
+  const textChunks = [];
+
+  const args = ['--print', prompt, '--output-format', 'stream-json', '--verbose'];
+  if (manager.skipPermissions) args.push('--dangerously-skip-permissions');
+
+  // Database MCP config (same pattern as agents)
+  let mcpConfigPath = null;
+  if (manager.dbConnectionString) {
+    const mcpArgs = ['-y', 'mongodb-mcp-server@latest'];
+    if (manager.dbReadOnly !== false) mcpArgs.push('--readOnly');
+    const mcpConfig = {
+      mcpServers: {
+        mongodb: {
+          command: 'npx',
+          args: mcpArgs,
+          env: { MDB_MCP_CONNECTION_STRING: manager.dbConnectionString }
+        }
+      }
+    };
+    mcpConfigPath = path.join(AUTOMATIONS_RUNS_DIR, automationId + '_manager_mcp.json');
+    fs.mkdirSync(path.dirname(mcpConfigPath), { recursive: true });
+    fs.writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig), 'utf8');
+    args.push('--mcp-config', mcpConfigPath);
+
+    if (manager.dbReadOnly !== false) {
+      const allowedTools = [
+        'mcp__mongodb__find', 'mcp__mongodb__count', 'mcp__mongodb__collection-indexes',
+        'mcp__mongodb__collection-schema', 'mcp__mongodb__collection-storage-size',
+        'mcp__mongodb__db-stats', 'mcp__mongodb__explain', 'mcp__mongodb__export',
+        'mcp__mongodb__list-collections', 'mcp__mongodb__list-databases',
+        'mcp__mongodb__mongodb-logs', 'mcp__mongodb__list-knowledge-sources',
+        'mcp__mongodb__search-knowledge',
+        'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'
+      ];
+      args.push('--allowedTools', allowedTools.join(','));
+    }
+  }
+
+  const child = spawn(getClaudePath(), args, {
+    cwd: cwd,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: Object.assign({}, process.env)
+  });
+
+  runningManagers.set(automationId, child);
+
+  let streamBuffer = '';
+  child.stdout.on('data', (chunk) => {
+    const raw = chunk.toString();
+    streamBuffer += raw;
+    const lines = streamBuffer.split('\n');
+    streamBuffer = lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const evt = JSON.parse(line);
+        let text = '';
+        if (evt.type === 'assistant' && evt.message && evt.message.content) {
+          evt.message.content.forEach(block => { if (block.type === 'text') text += block.text; });
+        } else if (evt.type === 'content_block_delta' && evt.delta && evt.delta.type === 'text_delta') {
+          text = evt.delta.text;
+        } else if (evt.type === 'result' && evt.result) {
+          if (typeof evt.result === 'string') text = evt.result;
+          else if (Array.isArray(evt.result)) evt.result.forEach(block => { if (block.type === 'text') text += block.text; });
+        }
+        if (text) textChunks.push(text);
+      } catch { /* skip */ }
+    }
+  });
+
+  child.stderr.on('data', (chunk) => { textChunks.push(chunk.toString()); });
+
+  child.on('close', (exitCode) => {
+    runningManagers.delete(automationId);
+    if (mcpConfigPath) try { fs.unlinkSync(mcpConfigPath); } catch { /* ignore */ }
+
+    const completedAt = new Date().toISOString();
+    const displayOutput = textChunks.join('');
+    const parsed = parseManagerResult(displayOutput);
+
+    // Save manager run history
+    const managerRunDir = path.join(AUTOMATIONS_RUNS_DIR, automationId, '_manager');
+    if (!fs.existsSync(managerRunDir)) fs.mkdirSync(managerRunDir, { recursive: true });
+    const runFilename = new Date(startedAt).toISOString().replace(/[:.]/g, '-') + '.json';
+    const runData = {
+      startedAt, completedAt,
+      durationMs: new Date(completedAt).getTime() - new Date(startedAt).getTime(),
+      exitCode, status: exitCode === 0 ? 'completed' : 'error',
+      summary: parsed.summary, output: displayOutput.substring(0, 50000),
+      attentionItems: parsed.attentionItems, actions: parsed.actions,
+      needsHuman: parsed.needsHuman, humanContext: parsed.humanContext
+    };
+    try { fs.writeFileSync(path.join(managerRunDir, runFilename), JSON.stringify(runData, null, 2), 'utf8'); } catch { /* ignore */ }
+
+    // Execute actions
+    let actionsExecuted = false;
+    if (parsed.actions && parsed.actions.length > 0 && !parsed.needsHuman) {
+      const currentRetries = managerRetryCounters.get(automationId) || 0;
+      const maxRetries = (automation.manager && automation.manager.maxRetries) || 1;
+
+      parsed.actions.forEach(action => {
+        if (action.type === 'rerun_agent' && action.agentId) {
+          if (currentRetries < maxRetries) {
+            managerRetryCounters.set(automationId, currentRetries + 1);
+            runAgent(automationId, action.agentId);
+            actionsExecuted = true;
+          } else {
+            // Exceeded retries — escalate
+            parsed.needsHuman = true;
+            parsed.humanContext = (parsed.humanContext || '') + '\nMax retries (' + maxRetries + ') reached for agent re-runs. Manual intervention needed.';
+          }
+        } else if (action.type === 'rerun_all') {
+          if (currentRetries < maxRetries) {
+            managerRetryCounters.set(automationId, currentRetries + 1);
+            const freshD = readAutomations();
+            const freshA = freshD.automations.find(a => a.id === automationId);
+            if (freshA) {
+              freshA.agents.forEach(ag => {
+                if (ag.enabled && ag.runMode === 'independent') runAgent(automationId, ag.id);
+              });
+            }
+            actionsExecuted = true;
+          } else {
+            parsed.needsHuman = true;
+            parsed.humanContext = (parsed.humanContext || '') + '\nMax retries (' + maxRetries + ') reached. Manual intervention needed.';
+          }
+        }
+      });
+    }
+
+    // Update manager state
+    const finalData = readAutomations();
+    const finalAuto = finalData.automations.find(a => a.id === automationId);
+    if (finalAuto && finalAuto.manager) {
+      finalAuto.manager.lastRunAt = completedAt;
+      finalAuto.manager.lastSummary = parsed.summary || null;
+
+      if (exitCode !== 0) {
+        finalAuto.manager.lastRunStatus = 'error';
+        finalAuto.manager.needsHuman = true;
+        finalAuto.manager.humanContext = 'Manager process exited with code ' + exitCode;
+      } else if (parsed.needsHuman) {
+        finalAuto.manager.lastRunStatus = 'escalated';
+        finalAuto.manager.needsHuman = true;
+        finalAuto.manager.humanContext = parsed.humanContext;
+      } else if (actionsExecuted) {
+        finalAuto.manager.lastRunStatus = 'acted';
+        // Don't clear retry counter — it resets on next fresh pipeline trigger
+      } else {
+        finalAuto.manager.lastRunStatus = 'resolved';
+        managerRetryCounters.delete(automationId);
+      }
+      writeAutomations(finalData);
+    }
+
+    // Notify renderer
+    if (mainWindow) {
+      mainWindow.webContents.send('automations:manager-completed', {
+        automationId,
+        status: finalAuto ? finalAuto.manager.lastRunStatus : 'error',
+        summary: parsed.summary,
+        needsHuman: parsed.needsHuman,
+        humanContext: parsed.humanContext,
+        actions: parsed.actions
+      });
+
+      // Windows notification + flash if needs human
+      if (parsed.needsHuman) {
+        mainWindow.flashFrame(true);
+        sendManagerNotification(automation, parsed.summary);
+      }
+    }
+  });
+
+  child.on('error', (err) => {
+    runningManagers.delete(automationId);
+    if (mcpConfigPath) try { fs.unlinkSync(mcpConfigPath); } catch { /* ignore */ }
+    const errData = readAutomations();
+    const errAuto = errData.automations.find(a => a.id === automationId);
+    if (errAuto && errAuto.manager) {
+      errAuto.manager.lastRunStatus = 'error';
+      errAuto.manager.needsHuman = true;
+      errAuto.manager.humanContext = 'Manager failed to start: ' + err.message;
+      writeAutomations(errData);
+    }
+    if (mainWindow) {
+      mainWindow.webContents.send('automations:manager-completed', {
+        automationId, status: 'error', needsHuman: true, summary: err.message
+      });
+      mainWindow.flashFrame(true);
+      sendManagerNotification(automation, 'Manager failed: ' + err.message);
+    }
+  });
+}
+
+const pipelineCompleteTimers = {};
+
+function checkPipelineComplete(automationId) {
+  clearTimeout(pipelineCompleteTimers[automationId]);
+  pipelineCompleteTimers[automationId] = setTimeout(() => {
+    const data = readAutomations();
+    const automation = data.automations.find(a => a.id === automationId);
+    if (!automation) return;
+    if (!automation.manager || !automation.manager.enabled) return;
+    if (runningManagers.has(automationId)) return;
+
+    // Check all agents are in terminal state
+    const allDone = automation.agents.every(ag => !ag.currentRunStartedAt);
+    const anyRan = automation.agents.some(ag => ag.lastRunStatus);
+    if (!allDone || !anyRan) return;
+
+    const anyFailed = automation.agents.some(ag =>
+      ag.lastRunStatus === 'error' || ag.lastRunStatus === 'skipped'
+    );
+
+    if (automation.manager.triggerOn === 'always' ||
+        (automation.manager.triggerOn === 'failure' && anyFailed)) {
+      runManager(automationId);
+    }
+  }, 2000);
 }
 
 function hasCyclicDependencies(agents) {
@@ -2215,6 +2615,12 @@ function stopAutomationScheduler() {
     try { child.kill(); } catch { /* ignore */ }
   });
   runningAgents.clear();
+
+  // Kill running managers
+  runningManagers.forEach((child) => {
+    try { child.kill(); } catch { /* ignore */ }
+  });
+  runningManagers.clear();
 
   // Mark all running agents as interrupted
   const data = readAutomations();
