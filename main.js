@@ -307,9 +307,12 @@ function createWindow() {
   mainWindow.on('close', (event) => {
     if (!isQuitting) {
       event.preventDefault();
-      mainWindow.hide();
       if (process.platform === 'darwin') {
+        mainWindow.hide();
         app.dock.hide();
+      } else {
+        // On Windows: minimize instead of hide so the taskbar button still works
+        mainWindow.minimize();
       }
     }
   });
