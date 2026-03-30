@@ -4000,6 +4000,11 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  margin-bottom: 12px;
+}
+
+.automation-form-group:last-child {
+  margin-bottom: 0;
 }
 
 .automation-form-group label {
@@ -4284,6 +4289,21 @@ html, body {
 }
 
 .agent-runafter-chip input { display: none; }
+
+.agent-runafter-chip.disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  border-style: dashed;
+}
+
+.agent-runafter-group {
+  margin-bottom: 12px;
+}
+
+.agent-isolation-path {
+  margin-top: 4px;
+  margin-bottom: 4px;
+}
 
 .automation-add-agent-row {
   padding: 4px 0;

@@ -5931,6 +5931,64 @@ var automationEditingId = null;
 var modalAgents = []; // Tracks agent data for the modal
 var activeCloneAutomationId = null;
 
+// Check if adding upstreamIdx as a dependency of agentIdx would create a cycle
+function wouldCreateCycle(agentIdx, upstreamIdx) {
+  // Build a temporary dependency graph with this hypothetical edge
+  var visited = {};
+  var inStack = {};
+  function getIdForIdx(idx) { return modalAgents[idx] ? (modalAgents[idx].id || 'temp_' + idx) : 'temp_' + idx; }
+
+  function dfs(idx) {
+    var id = getIdForIdx(idx);
+    if (inStack[id]) return true;
+    if (visited[id]) return false;
+    visited[id] = true;
+    inStack[id] = true;
+
+    var ag = modalAgents[idx];
+    if (ag && ag.runAfter) {
+      for (var i = 0; i < ag.runAfter.length; i++) {
+        // Find the index of this upstream agent
+        var upIdx = modalAgents.findIndex(function (a) { return (a.id || 'temp_' + modalAgents.indexOf(a)) === ag.runAfter[i]; });
+        if (upIdx !== -1 && dfs(upIdx)) return true;
+      }
+    }
+    // Also check the hypothetical edge
+    if (idx === agentIdx && dfs(upstreamIdx)) return true;
+
+    delete inStack[id];
+    return false;
+  }
+  return dfs(agentIdx);
+}
+
+// Update disabled state on all runAfter chips across all cards
+function updateRunAfterChipStates() {
+  document.querySelectorAll('#automation-agents-list .agent-card').forEach(function (card) {
+    var idx = parseInt(card.dataset.agentIndex);
+    var ag = modalAgents[idx];
+    if (!ag || ag.runMode !== 'run_after') return;
+
+    card.querySelectorAll('.agent-runafter-chip').forEach(function (chip) {
+      var cb = chip.querySelector('input[type="checkbox"]');
+      if (!cb) return;
+      var targetIdx = parseInt(cb.value);
+      if (cb.checked) {
+        chip.classList.remove('disabled');
+        return; // Already selected — don't disable
+      }
+      // Check if selecting this would create a cycle
+      if (wouldCreateCycle(idx, targetIdx)) {
+        chip.classList.add('disabled');
+        cb.disabled = true;
+      } else {
+        chip.classList.remove('disabled');
+        cb.disabled = false;
+      }
+    });
+  });
+}
+
 function openAutomationModal(existingAutomation) {
   automationEditingId = existingAutomation ? existingAutomation.id : null;
   var title = existingAutomation ? 'Edit Automation' : 'New Automation';
@@ -5988,6 +6046,8 @@ function renderModalAgentCards() {
     var idx = parseInt(card.dataset.agentIndex);
     bindAgentCardEvents(card, idx);
   });
+  // After all cards rendered & bound, update chip disabled states
+  updateRunAfterChipStates();
 }
 
 function createAgentCardHtml(agentIndex, agent, isCollapsed, allAgents) {
@@ -6196,6 +6256,20 @@ function bindAgentCardEvents(card, agentIndex) {
     });
   }
 
+  // RunAfter chip click handlers — sync state and update disabled chips across all cards
+  card.querySelectorAll('.agent-runafter-chip').forEach(function (chip) {
+    chip.addEventListener('click', function (e) {
+      var cb = chip.querySelector('input[type="checkbox"]');
+      if (!cb || cb.disabled) { e.preventDefault(); return; }
+      // Toggle is handled by the checkbox default behavior, just sync after
+      setTimeout(function () {
+        chip.classList.toggle('selected', cb.checked);
+        syncAgentFromCard(card, agentIndex);
+        updateRunAfterChipStates();
+      }, 0);
+    });
+  });
+
   var runModeSelect = card.querySelector('.agent-run-mode');
   if (runModeSelect) {
     runModeSelect.addEventListener('change', function () {
@@ -6204,6 +6278,10 @@ function bindAgentCardEvents(card, agentIndex) {
       var schedSection = card.querySelector('.agent-schedule-section');
       if (runAfterGroup) runAfterGroup.style.display = this.value === 'run_after' ? '' : 'none';
       if (schedSection) schedSection.style.display = this.value === 'run_after' ? 'none' : '';
+      // When switching to run_after, update chip disabled states
+      if (this.value === 'run_after') {
+        setTimeout(updateRunAfterChipStates, 0);
+      }
     });
   }
 
