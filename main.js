@@ -1507,16 +1507,40 @@ ipcMain.handle('automations:export', (event, projectPath) => {
   const normalized = projectPath.replace(/\\/g, '/');
   const automations = data.automations
     .filter(a => a.projectPath.replace(/\\/g, '/') === normalized)
-    .map(a => ({
-      name: a.name,
-      agents: a.agents.map(ag => ({
-        name: ag.name, prompt: ag.prompt, schedule: ag.schedule,
-        runMode: ag.runMode, runAfter: ag.runAfter, runOnUpstreamFailure: ag.runOnUpstreamFailure,
-        isolation: { enabled: ag.isolation ? ag.isolation.enabled : false },
-        skipPermissions: ag.skipPermissions || false, firstStartOnly: ag.firstStartOnly || false,
-        dbConnectionString: ag.dbConnectionString || null, dbReadOnly: ag.dbReadOnly !== false
-      }))
-    }));
+    .map(a => {
+      const exported = {
+        name: a.name,
+        agents: a.agents.map(ag => {
+          // Convert runAfter IDs to agent names for portability
+          const runAfterNames = (ag.runAfter || []).map(id => {
+            const upstream = a.agents.find(other => other.id === id);
+            return upstream ? upstream.name : id;
+          });
+          return {
+            name: ag.name, prompt: ag.prompt, schedule: ag.schedule,
+            runMode: ag.runMode, runAfter: runAfterNames, runOnUpstreamFailure: ag.runOnUpstreamFailure,
+            passUpstreamContext: ag.passUpstreamContext || false,
+            isolation: { enabled: ag.isolation ? ag.isolation.enabled : false },
+            skipPermissions: ag.skipPermissions || false, firstStartOnly: ag.firstStartOnly || false,
+            dbConnectionString: ag.dbConnectionString || null, dbReadOnly: ag.dbReadOnly !== false
+          };
+        })
+      };
+      if (a.manager && a.manager.enabled) {
+        exported.manager = {
+          enabled: true,
+          prompt: a.manager.prompt || '',
+          triggerOn: a.manager.triggerOn || 'failure',
+          includeFullOutput: a.manager.includeFullOutput || false,
+          skipPermissions: a.manager.skipPermissions || false,
+          dbConnectionString: a.manager.dbConnectionString || null,
+          dbReadOnly: a.manager.dbReadOnly !== false,
+          isolation: { enabled: a.manager.isolation ? a.manager.isolation.enabled : false },
+          maxRetries: a.manager.maxRetries || 1
+        };
+      }
+      return exported;
+    });
   if (automations.length === 0) return { cancelled: true };
   const result = dialog.showSaveDialogSync(mainWindow, {
     title: 'Export Automations',
@@ -1535,14 +1559,34 @@ ipcMain.handle('automations:exportOne', (event, automationId) => {
   if (!automation) return { cancelled: true };
   const exported = {
     name: automation.name,
-    agents: automation.agents.map(ag => ({
-      name: ag.name, prompt: ag.prompt, schedule: ag.schedule,
-      runMode: ag.runMode, runAfter: ag.runAfter, runOnUpstreamFailure: ag.runOnUpstreamFailure,
-      isolation: { enabled: ag.isolation ? ag.isolation.enabled : false },
-      skipPermissions: ag.skipPermissions || false, firstStartOnly: ag.firstStartOnly || false,
-      dbConnectionString: ag.dbConnectionString || null, dbReadOnly: ag.dbReadOnly !== false
-    }))
+    agents: automation.agents.map(ag => {
+      const runAfterNames = (ag.runAfter || []).map(id => {
+        const upstream = automation.agents.find(other => other.id === id);
+        return upstream ? upstream.name : id;
+      });
+      return {
+        name: ag.name, prompt: ag.prompt, schedule: ag.schedule,
+        runMode: ag.runMode, runAfter: runAfterNames, runOnUpstreamFailure: ag.runOnUpstreamFailure,
+        passUpstreamContext: ag.passUpstreamContext || false,
+        isolation: { enabled: ag.isolation ? ag.isolation.enabled : false },
+        skipPermissions: ag.skipPermissions || false, firstStartOnly: ag.firstStartOnly || false,
+        dbConnectionString: ag.dbConnectionString || null, dbReadOnly: ag.dbReadOnly !== false
+      };
+    })
   };
+  if (automation.manager && automation.manager.enabled) {
+    exported.manager = {
+      enabled: true,
+      prompt: automation.manager.prompt || '',
+      triggerOn: automation.manager.triggerOn || 'failure',
+      includeFullOutput: automation.manager.includeFullOutput || false,
+      skipPermissions: automation.manager.skipPermissions || false,
+      dbConnectionString: automation.manager.dbConnectionString || null,
+      dbReadOnly: automation.manager.dbReadOnly !== false,
+      isolation: { enabled: automation.manager.isolation ? automation.manager.isolation.enabled : false },
+      maxRetries: automation.manager.maxRetries || 1
+    };
+  }
   const safeName = automation.name.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
   const result = dialog.showSaveDialogSync(mainWindow, {
     title: 'Export Automation',
@@ -1623,18 +1667,46 @@ ipcMain.handle('automations:import', (event, projectPath) => {
           currentRunStartedAt: null
         }, ag, { id: newId, isolation: { enabled: ag.isolation ? ag.isolation.enabled : false, clonePath: null } });
       });
-      // Second pass: remap runAfter references
+      // Build name-to-id map for name-based runAfter references
+      const nameToIdMap = {};
+      agents.forEach(ag => { nameToIdMap[ag.name] = ag.id; });
+
+      // Second pass: remap runAfter references (supports both IDs and agent names)
       agents.forEach(agent => {
         if (agent.runAfter && agent.runAfter.length > 0) {
-          agent.runAfter = agent.runAfter.map(ref => importIdMap[ref] || ref);
+          agent.runAfter = agent.runAfter.map(ref => importIdMap[ref] || nameToIdMap[ref] || ref);
         }
       });
+
+      // Import manager config if present
+      let managerConfig = { enabled: false };
+      if (imported.manager && imported.manager.enabled) {
+        managerConfig = Object.assign({
+          enabled: true,
+          prompt: '',
+          triggerOn: 'failure',
+          includeFullOutput: false,
+          skipPermissions: false,
+          dbConnectionString: null,
+          dbReadOnly: true,
+          isolation: { enabled: false, clonePath: null },
+          maxRetries: 1,
+          lastRunAt: null,
+          lastRunStatus: null,
+          lastSummary: null,
+          needsHuman: false,
+          humanContext: null
+        }, imported.manager, {
+          isolation: { enabled: imported.manager.isolation ? imported.manager.isolation.enabled : false, clonePath: null }
+        });
+      }
 
       data.automations.push({
         id: automationId,
         name: imported.name,
         projectPath: projectPath,
         agents: agents,
+        manager: managerConfig,
         enabled: true,
         createdAt: new Date().toISOString()
       });
