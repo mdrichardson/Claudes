@@ -6482,7 +6482,7 @@ function createAgentCardHtml(agentIndex, agent, isCollapsed, allAgents) {
     if (runMode === 'run_after') badges += '<span class="agent-badge agent-badge-chained">Chained</span>';
     if (agent && agent.isolation && agent.isolation.enabled) badges += '<span class="agent-badge agent-badge-isolated">Isolated</span>';
 
-    var schedSummary = agent ? formatScheduleText(agent) : '';
+    var schedSummary = (agent && runMode !== 'run_after') ? formatScheduleText(agent) : '';
 
     header = '<div class="agent-card-header" data-agent-index="' + agentIndex + '">' +
       '<span class="agent-card-collapse-icon">' + (isCollapsed ? '&#9654;' : '&#9660;') + '</span>' +
