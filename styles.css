@@ -4704,3 +4704,20 @@ html, body {
   margin-top: 12px;
   text-align: center;
 }
+
+/* Automation section headers (Manual / Scheduled) */
+.automation-section-header {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  padding: 8px 10px 4px 10px;
+  border-top: 1px solid var(--border-primary);
+  margin-top: 4px;
+}
+
+.automation-section-header:first-child {
+  border-top: none;
+  margin-top: 0;
+}

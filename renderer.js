@@ -5663,6 +5663,13 @@ function formatScheduleText(agent) {
   return labels.join(', ');
 }
 
+function isManualAutomation(automation) {
+  // An automation is "manual" if ALL its independent agents have manual schedule
+  var independentAgents = automation.agents.filter(function (ag) { return ag.runMode === 'independent'; });
+  if (independentAgents.length === 0) return false;
+  return independentAgents.every(function (ag) { return ag.schedule && ag.schedule.type === 'manual'; });
+}
+
 function renderAutomationCards(automations, container) {
   container.innerHTML = '';
   if (automations.length === 0) {
@@ -5670,7 +5677,29 @@ function renderAutomationCards(automations, container) {
     return;
   }
 
-  automations.forEach(function (automation) {
+  // Sort: manual automations first, then scheduled
+  var manualAutomations = automations.filter(isManualAutomation);
+  var scheduledAutomations = automations.filter(function (a) { return !isManualAutomation(a); });
+
+  if (manualAutomations.length > 0 && scheduledAutomations.length > 0) {
+    var manualHeader = document.createElement('div');
+    manualHeader.className = 'automation-section-header';
+    manualHeader.textContent = 'Manual';
+    container.appendChild(manualHeader);
+  }
+
+  var allSorted = manualAutomations.concat(scheduledAutomations);
+  var addedDivider = false;
+
+  allSorted.forEach(function (automation) {
+    // Add divider between manual and scheduled sections
+    if (!addedDivider && !isManualAutomation(automation) && manualAutomations.length > 0 && scheduledAutomations.length > 0) {
+      addedDivider = true;
+      var schedHeader = document.createElement('div');
+      schedHeader.className = 'automation-section-header';
+      schedHeader.textContent = 'Scheduled';
+      container.appendChild(schedHeader);
+    }
     var card = document.createElement('div');
     card.className = 'automation-card';
     var isSimple = automation.agents.length === 1;
@@ -6480,13 +6509,21 @@ function createAgentCardHtml(agentIndex, agent, isCollapsed, allAgents) {
     runAfterHtml = '<div class="automation-form-group agent-runafter-group" style="' + (runMode === 'run_after' ? '' : 'display:none;') + '">' +
       '<label>Run after</label>' +
       '<div class="agent-runafter-chips">' + chipOptions + '</div>' +
+      '<div class="automation-permission-hint" style="margin-top:4px;">Select only direct dependencies — chains are followed automatically</div>' +
       '<label class="automation-permission-option" style="margin-top:6px;">' +
         '<input type="checkbox" class="agent-run-on-failure"' + (agent && agent.runOnUpstreamFailure ? ' checked' : '') + '>' +
         '<span>Run even if upstream fails <span class="automation-permission-hint">(skip if unchecked)</span></span>' +
       '</label>' +
-      '<label class="automation-permission-option" style="margin-top:6px;">' +
+      '</div>';
+  }
+
+  // Pass upstream context — available for all agents in multi-agent mode
+  var passContextHtml = '';
+  if (isMulti) {
+    passContextHtml = '<div class="automation-form-group">' +
+      '<label class="automation-permission-option">' +
         '<input type="checkbox" class="agent-pass-context"' + (agent && agent.passUpstreamContext ? ' checked' : '') + '>' +
-        '<span>Pass upstream output as context <span class="automation-permission-hint">(prepend summary to prompt)</span></span>' +
+        '<span>Pass output as context to downstream agents <span class="automation-permission-hint">(summary prepended to chained agent prompts)</span></span>' +
       '</label>' +
       '</div>';
   }
@@ -6533,6 +6570,7 @@ function createAgentCardHtml(agentIndex, agent, isCollapsed, allAgents) {
         '</select>' +
       '</div>' : '') +
       runAfterHtml +
+      passContextHtml +
       isolationHtml +
       '<div class="agent-schedule-section" style="' + scheduleDisplay + '">' +
         '<div class="automation-form-group">' +
@@ -6713,6 +6751,28 @@ function bindAgentCardEvents(card, agentIndex) {
       if (intervalFields) intervalFields.style.display = type === 'interval' ? '' : 'none';
       if (todFields) todFields.style.display = type === 'time_of_day' ? '' : 'none';
       if (startupFields) startupFields.style.display = type === 'app_startup' ? '' : 'none';
+    });
+  }
+
+  // Update chip labels and header when agent name changes
+  var nameInput = card.querySelector('.agent-name');
+  if (nameInput) {
+    nameInput.addEventListener('input', function () {
+      modalAgents[agentIndex].name = this.value;
+      // Update this agent's name in runAfter chips across all other cards
+      document.querySelectorAll('#automation-agents-list .agent-card').forEach(function (otherCard) {
+        var otherIdx = parseInt(otherCard.dataset.agentIndex);
+        if (otherIdx === agentIndex) return;
+        otherCard.querySelectorAll('.agent-runafter-chip').forEach(function (chip) {
+          var cb = chip.querySelector('input[type="checkbox"]');
+          if (cb && parseInt(cb.value) === agentIndex) {
+            var label = chip.childNodes[chip.childNodes.length - 1];
+            if (label && label.nodeType === 3) {
+              label.textContent = ' ' + (nameInput.value || 'Agent ' + (agentIndex + 1));
+            }
+          }
+        });
+      });
     });
   }
 
