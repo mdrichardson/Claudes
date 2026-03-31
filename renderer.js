@@ -6759,6 +6759,9 @@ function bindAgentCardEvents(card, agentIndex) {
   if (nameInput) {
     nameInput.addEventListener('input', function () {
       modalAgents[agentIndex].name = this.value;
+      // Update own collapsed header title
+      var headerTitle = card.querySelector('.agent-card-title');
+      if (headerTitle) headerTitle.textContent = this.value || 'Agent ' + (agentIndex + 1);
       // Update this agent's name in runAfter chips across all other cards
       document.querySelectorAll('#automation-agents-list .agent-card').forEach(function (otherCard) {
         var otherIdx = parseInt(otherCard.dataset.agentIndex);
