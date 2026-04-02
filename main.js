@@ -6,6 +6,9 @@ const os = require('os');
 const { spawn, execFileSync } = require('child_process');
 const http = require('http');
 
+// Set appUserModelId early so Windows uses a consistent taskbar icon across restarts
+app.setAppUserModelId('com.thecodeguy.claudes');
+
 let mainWindow;
 let tray;
 let isQuitting = false;
