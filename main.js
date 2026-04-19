@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, clipboard, nativeTheme, shell, Tray, Menu, nativeImage, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, clipboard, nativeTheme, shell, Tray, Menu, nativeImage, Notification, powerMonitor } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -966,29 +966,34 @@ ipcMain.handle('launch:readEnvFile', (event, filePath) => {
 
 // --- Usage ---
 
-ipcMain.handle('usage:getAll', () => {
+ipcMain.handle('usage:getAll', async () => {
   const claudeProjectsDir = path.join(os.homedir(), '.claude', 'projects');
   const results = [];
 
   try {
-    if (!fs.existsSync(claudeProjectsDir)) return results;
+    let projectDirs;
+    try {
+      projectDirs = await fs.promises.readdir(claudeProjectsDir);
+    } catch {
+      return results; // doesn't exist or unreadable
+    }
 
-    const projectDirs = fs.readdirSync(claudeProjectsDir);
     for (const dir of projectDirs) {
       const projectDir = path.join(claudeProjectsDir, dir);
       let stat;
-      try { stat = fs.statSync(projectDir); } catch { continue; }
+      try { stat = await fs.promises.stat(projectDir); } catch { continue; }
       if (!stat.isDirectory()) continue;
 
       let jsonlFiles;
       try {
-        jsonlFiles = fs.readdirSync(projectDir).filter(f => f.endsWith('.jsonl'));
+        const entries = await fs.promises.readdir(projectDir);
+        jsonlFiles = entries.filter(f => f.endsWith('.jsonl'));
       } catch { continue; }
 
       for (const file of jsonlFiles) {
         const filePath = path.join(projectDir, file);
         let fileStat;
-        try { fileStat = fs.statSync(filePath); } catch { continue; }
+        try { fileStat = await fs.promises.stat(filePath); } catch { continue; }
 
         const sessionId = file.replace('.jsonl', '');
         let inputTokens = 0;
@@ -1001,7 +1006,7 @@ ipcMain.handle('usage:getAll', () => {
         let messageCount = 0;
 
         try {
-          const content = fs.readFileSync(filePath, 'utf8');
+          const content = await fs.promises.readFile(filePath, 'utf8');
           const lines = content.split('\n').filter(Boolean);
           for (const line of lines) {
             let entry;
@@ -3050,6 +3055,12 @@ if (!gotLock) {
     setupAutoUpdater();
     migrateLoopsToAutomations();
     startAutomationScheduler();
+
+    powerMonitor.on('resume', () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('power:resume');
+      }
+    });
   });
 
   app.on('activate', () => {

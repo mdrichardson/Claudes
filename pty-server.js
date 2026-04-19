@@ -5,8 +5,9 @@ const { execFileSync } = require('child_process');
 const PORT = parseInt(process.env.PTY_PORT || '3456', 10);
 const ptys = new Map();
 const orphanTimers = new Map();      // id -> timeout handle for grace period cleanup
-const orphanBuffers = new Map();     // id -> array of buffered data while disconnected
-const ORPHAN_GRACE_MS = 120000;      // 2 minutes grace period before killing orphaned ptys
+const orphanBuffers = new Map();     // id -> { chunks: string[], bytes: number } buffered while disconnected
+const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000; // 24h — survive long laptop-lid closes
+const ORPHAN_BUFFER_MAX_BYTES = 2 * 1024 * 1024; // 2 MB per pty — dropping oldest output on overflow
 
 // Resolve claude executable path
 function findClaude() {
@@ -53,10 +54,18 @@ wss.on('connection', (ws) => {
           ws.send(JSON.stringify({ type: 'data', id, data }));
         } catch { /* ws closed */ }
       } else {
-        // Buffer output while disconnected
+        // Buffer output while disconnected, capped at ORPHAN_BUFFER_MAX_BYTES.
+        // Otherwise a chatty Claude session can leak GBs of RAM during a 24h
+        // orphan grace window.
         let buf = orphanBuffers.get(id);
-        if (!buf) { buf = []; orphanBuffers.set(id, buf); }
-        buf.push(data);
+        if (!buf) { buf = { chunks: [], bytes: 0 }; orphanBuffers.set(id, buf); }
+        const size = Buffer.byteLength(data, 'utf8');
+        buf.chunks.push(data);
+        buf.bytes += size;
+        while (buf.bytes > ORPHAN_BUFFER_MAX_BYTES && buf.chunks.length > 1) {
+          const dropped = buf.chunks.shift();
+          buf.bytes -= Buffer.byteLength(dropped, 'utf8');
+        }
       }
     };
 
@@ -152,7 +161,7 @@ wss.on('connection', (ws) => {
           // Flush any buffered output
           const buf = orphanBuffers.get(id);
           if (buf) {
-            for (const data of buf) {
+            for (const data of buf.chunks) {
               try {
                 ws.send(JSON.stringify({ type: 'data', id, data }));
               } catch { break; }
@@ -200,7 +209,7 @@ wss.on('connection', (ws) => {
       const p = ptys.get(id);
       if (p) {
         // Start buffering output (don't overwrite if handler already started buffering)
-        if (!orphanBuffers.has(id)) orphanBuffers.set(id, []);
+        if (!orphanBuffers.has(id)) orphanBuffers.set(id, { chunks: [], bytes: 0 });
 
         // Set a grace timer — if no reattach within the window, kill the pty
         orphanTimers.set(id, setTimeout(() => {

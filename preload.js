@@ -107,5 +107,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onManagerOutput: (callback) => ipcRenderer.on('automations:manager-output', (_, data) => callback(data)),
   onManagerStarted: (callback) => ipcRenderer.on('automations:manager-started', (_, data) => callback(data)),
   onManagerCompleted: (callback) => ipcRenderer.on('automations:manager-completed', (_, data) => callback(data)),
-  onFocusManager: (callback) => ipcRenderer.on('automations:focus-manager', (_, data) => callback(data))
+  onFocusManager: (callback) => ipcRenderer.on('automations:focus-manager', (_, data) => callback(data)),
+  onPowerResume: (callback) => ipcRenderer.on('power:resume', () => callback())
 });
