@@ -46,6 +46,35 @@ function writeConfig(config) {
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8');
 }
 
+// The renderer calls saveProjects on every drag/resize/tab tweak, which previously
+// hit fs.writeFileSync on every event. Debounce so we coalesce bursts into a single
+// write, and flush synchronously on quit so nothing is lost.
+const CONFIG_WRITE_DEBOUNCE_MS = 400;
+let pendingConfig = null;
+let pendingConfigTimer = null;
+
+function scheduleWriteConfig(config) {
+  pendingConfig = config;
+  if (pendingConfigTimer) return;
+  pendingConfigTimer = setTimeout(() => {
+    pendingConfigTimer = null;
+    const cfg = pendingConfig;
+    pendingConfig = null;
+    if (cfg) {
+      try { writeConfig(cfg); } catch (err) { console.error('writeConfig failed:', err); }
+    }
+  }, CONFIG_WRITE_DEBOUNCE_MS);
+}
+
+function flushPendingConfig() {
+  if (pendingConfigTimer) { clearTimeout(pendingConfigTimer); pendingConfigTimer = null; }
+  if (pendingConfig) {
+    const cfg = pendingConfig;
+    pendingConfig = null;
+    try { writeConfig(cfg); } catch (err) { console.error('writeConfig failed:', err); }
+  }
+}
+
 // --- Loops Persistence ---
 
 function readLoops() {
@@ -340,7 +369,7 @@ ipcMain.handle('config:getProjects', () => {
 });
 
 ipcMain.handle('config:saveProjects', (event, config) => {
-  writeConfig(config);
+  scheduleWriteConfig(config);
 });
 
 ipcMain.handle('app:getStartWithOS', () => {
@@ -3100,6 +3129,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  flushPendingConfig();
   stopAutomationScheduler();
   if (ptyServerProcess) {
     ptyServerProcess.kill();
