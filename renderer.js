@@ -2983,9 +2983,13 @@ var gitAmendCheckbox = document.getElementById('git-amend-checkbox');
 var gitPollTimer = null;
 var lastGitRaw = null;
 var graphLaneState = null;
+var gitPollInFlight = false;
 
 function refreshGitStatus(force) {
   if (!activeProjectKey || !window.electronAPI) return;
+  // Skip background polls if a previous batch is still running — prevents
+  // backed-up git calls piling up on the main thread when the repo or disk is slow.
+  if (gitPollInFlight && !force) return;
 
   var fetchAll = [
     window.electronAPI.gitStatus(activeProjectKey),
@@ -2997,13 +3001,16 @@ function refreshGitStatus(force) {
     window.electronAPI.gitDiffStat(activeProjectKey, true)
   ];
 
+  gitPollInFlight = true;
+  var done = function () { gitPollInFlight = false; };
+
   if (!force) {
     Promise.all(fetchAll).then(function (results) {
       var rawKey = JSON.stringify(results[0]) + '|' + results[1] + '|' + JSON.stringify(results[2]) + '|' + results[3].length + '|' + JSON.stringify(results[4]);
       if (rawKey === lastGitRaw) return;
       lastGitRaw = rawKey;
       renderGitStatus(results[0], results[1], results[2], results[3], results[4], results[5], results[6]);
-    });
+    }).then(done, done);
     return;
   }
 
@@ -3011,7 +3018,7 @@ function refreshGitStatus(force) {
   Promise.all(fetchAll).then(function (results) {
     lastGitRaw = JSON.stringify(results[0]) + '|' + results[1] + '|' + JSON.stringify(results[2]) + '|' + results[3].length + '|' + JSON.stringify(results[4]);
     renderGitStatus(results[0], results[1], results[2], results[3], results[4], results[5], results[6]);
-  });
+  }).then(done, done);
 }
 
 function renderGitStatus(files, branch, aheadBehind, stashes, graphLog, unstagedStats, stagedStats) {
