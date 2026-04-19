@@ -454,8 +454,8 @@ ipcMain.handle('sessions:getTitle', (event, projectPath, sessionId) => {
         let text = typeof msg.message.content === 'string'
           ? msg.message.content
           : msg.message.content.filter(b => b.type === 'text').map(b => b.text).join(' ');
-        // Strip XML/HTML tags (from skill invocations etc.)
-        text = text.replace(/<[^>]+>/g, '').trim();
+        // Strip XML/HTML delimiters (from skill invocations etc.)
+        text = text.replace(/[<>]/g, '').trim();
         if (!text) continue;
         const firstLine = text.split('\n')[0].trim();
         if (!firstLine) continue;
