@@ -3,7 +3,7 @@ const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { spawn, execFileSync } = require('child_process');
+const { spawn, execFile, execFileSync } = require('child_process');
 const http = require('http');
 
 // Set appUserModelId early so Windows uses a consistent taskbar icon across restarts
@@ -557,9 +557,24 @@ ipcMain.handle('fs:searchFiles', (event, rootDir, query) => {
   return results;
 });
 
-ipcMain.handle('git:status', (event, projectPath) => {
+// Async git runner — never block the Electron main thread.
+// execFile() preserves stderr/stdout on error like execFileSync does.
+function runGit(cwd, args, timeout) {
+  return new Promise((resolve, reject) => {
+    execFile('git', args, { cwd, encoding: 'utf8', timeout: timeout || 5000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) {
+        err.stderr = err.stderr || stderr;
+        err.stdout = err.stdout || stdout;
+        return reject(err);
+      }
+      resolve(stdout);
+    });
+  });
+}
+
+ipcMain.handle('git:status', async (event, projectPath) => {
   try {
-    const output = execFileSync('git', ['status', '--porcelain'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 });
+    const output = await runGit(projectPath, ['status', '--porcelain'], 5000);
     return output.replace(/\s+$/, '').split('\n').filter(Boolean).map(line => ({
       status: line.substring(0, 2),
       file: line.substring(3)
@@ -569,90 +584,90 @@ ipcMain.handle('git:status', (event, projectPath) => {
   }
 });
 
-ipcMain.handle('git:branch', (event, projectPath) => {
+ipcMain.handle('git:branch', async (event, projectPath) => {
   try {
-    return execFileSync('git', ['branch', '--show-current'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 }).trim();
+    return (await runGit(projectPath, ['branch', '--show-current'], 5000)).trim();
   } catch {
     return '';
   }
 });
 
-ipcMain.handle('git:stageFile', (event, projectPath, filePath) => {
+ipcMain.handle('git:stageFile', async (event, projectPath, filePath) => {
   try {
-    execFileSync('git', ['add', '--', filePath], { cwd: projectPath, encoding: 'utf8', timeout: 5000 });
+    await runGit(projectPath, ['add', '--', filePath], 5000);
     return { success: true };
   } catch (err) {
     return { success: false, error: (err.stderr || err.message).toString().trim() };
   }
 });
 
-ipcMain.handle('git:unstageFile', (event, projectPath, filePath) => {
+ipcMain.handle('git:unstageFile', async (event, projectPath, filePath) => {
   try {
-    execFileSync('git', ['reset', 'HEAD', '--', filePath], { cwd: projectPath, encoding: 'utf8', timeout: 5000 });
+    await runGit(projectPath, ['reset', 'HEAD', '--', filePath], 5000);
     return { success: true };
   } catch (err) {
     return { success: false, error: (err.stderr || err.message).toString().trim() };
   }
 });
 
-ipcMain.handle('git:stageAll', (event, projectPath) => {
+ipcMain.handle('git:stageAll', async (event, projectPath) => {
   try {
-    execFileSync('git', ['add', '-A'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 });
+    await runGit(projectPath, ['add', '-A'], 5000);
     return { success: true };
   } catch (err) {
     return { success: false, error: (err.stderr || err.message).toString().trim() };
   }
 });
 
-ipcMain.handle('git:unstageAll', (event, projectPath) => {
+ipcMain.handle('git:unstageAll', async (event, projectPath) => {
   try {
-    execFileSync('git', ['reset', 'HEAD'], { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
+    await runGit(projectPath, ['reset', 'HEAD'], 10000);
     return { success: true };
   } catch (err) {
     return { success: false, error: (err.stderr || err.message).toString().trim() };
   }
 });
 
-ipcMain.handle('git:commit', (event, projectPath, message, amend) => {
+ipcMain.handle('git:commit', async (event, projectPath, message, amend) => {
   try {
     const args = amend ? ['commit', '--amend', '-m', message] : ['commit', '-m', message];
-    execFileSync('git', args, { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
+    await runGit(projectPath, args, 10000);
     return { success: true };
   } catch (err) {
     return { success: false, error: (err.stderr || err.message).toString().trim() };
   }
 });
 
-ipcMain.handle('git:pull', (event, projectPath) => {
+ipcMain.handle('git:pull', async (event, projectPath) => {
   try {
-    const output = execFileSync('git', ['pull'], { cwd: projectPath, encoding: 'utf8', timeout: 30000 });
+    const output = await runGit(projectPath, ['pull'], 30000);
     return { success: true, output: output.trim() || 'Pull complete' };
   } catch (err) {
     return { success: false, error: (err.stderr || err.message).toString().trim() };
   }
 });
 
-ipcMain.handle('git:push', (event, projectPath) => {
+ipcMain.handle('git:push', async (event, projectPath) => {
   try {
-    execFileSync('git', ['push'], { cwd: projectPath, encoding: 'utf8', timeout: 30000 });
+    await runGit(projectPath, ['push'], 30000);
     return { success: true, output: 'Push complete' };
   } catch (err) {
     return { success: false, error: (err.stderr || err.message).toString().trim() };
   }
 });
 
-ipcMain.handle('git:discardFile', (event, projectPath, filePath) => {
+ipcMain.handle('git:discardFile', async (event, projectPath, filePath) => {
   try {
-    execFileSync('git', ['checkout', '--', filePath], { cwd: projectPath, encoding: 'utf8', timeout: 5000 });
+    await runGit(projectPath, ['checkout', '--', filePath], 5000);
     return { success: true };
   } catch (err) {
     return { success: false, error: (err.stderr || err.message).toString().trim() };
   }
 });
 
-ipcMain.handle('git:branches', (event, projectPath) => {
+ipcMain.handle('git:branches', async (event, projectPath) => {
   try {
-    const output = execFileSync('git', ['branch', '--list', '--no-color'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 });
+    const output = await runGit(projectPath, ['branch', '--list', '--no-color'], 5000);
     return output.trim().split('\n').filter(Boolean).map(line => ({
       name: line.replace(/^\*?\s+/, ''),
       isCurrent: line.startsWith('*')
@@ -662,27 +677,27 @@ ipcMain.handle('git:branches', (event, projectPath) => {
   }
 });
 
-ipcMain.handle('git:checkout', (event, projectPath, branchName) => {
+ipcMain.handle('git:checkout', async (event, projectPath, branchName) => {
   try {
-    execFileSync('git', ['checkout', branchName], { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
+    await runGit(projectPath, ['checkout', branchName], 10000);
     return { success: true };
   } catch (err) {
     return { success: false, error: (err.stderr || err.message).toString().trim() };
   }
 });
 
-ipcMain.handle('git:createBranch', (event, projectPath, branchName) => {
+ipcMain.handle('git:createBranch', async (event, projectPath, branchName) => {
   try {
-    execFileSync('git', ['checkout', '-b', branchName], { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
+    await runGit(projectPath, ['checkout', '-b', branchName], 10000);
     return { success: true };
   } catch (err) {
     return { success: false, error: (err.stderr || err.message).toString().trim() };
   }
 });
 
-ipcMain.handle('git:aheadBehind', (event, projectPath) => {
+ipcMain.handle('git:aheadBehind', async (event, projectPath) => {
   try {
-    const output = execFileSync('git', ['rev-list', '--count', '--left-right', 'HEAD...@{upstream}'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 });
+    const output = await runGit(projectPath, ['rev-list', '--count', '--left-right', 'HEAD...@{upstream}'], 5000);
     const parts = output.trim().split(/\s+/);
     return { ahead: parseInt(parts[0]) || 0, behind: parseInt(parts[1]) || 0 };
   } catch {
@@ -690,14 +705,14 @@ ipcMain.handle('git:aheadBehind', (event, projectPath) => {
   }
 });
 
-ipcMain.handle('git:diff', (event, projectPath, filePath, staged) => {
+ipcMain.handle('git:diff', async (event, projectPath, filePath, staged) => {
   try {
     const args = staged ? ['diff', '--cached', '--', filePath] : ['diff', '--', filePath];
-    return execFileSync('git', args, { cwd: projectPath, encoding: 'utf8', timeout: 5000 });
-  } catch (err) {
+    return await runGit(projectPath, args, 5000);
+  } catch {
     // For untracked files, show full content as additions
     try {
-      const content = require('fs').readFileSync(require('path').join(projectPath, filePath), 'utf8');
+      const content = await fs.promises.readFile(path.join(projectPath, filePath), 'utf8');
       return content.split('\n').map(line => '+' + line).join('\n');
     } catch {
       return '';
@@ -705,9 +720,9 @@ ipcMain.handle('git:diff', (event, projectPath, filePath, staged) => {
   }
 });
 
-ipcMain.handle('git:graphLog', (event, projectPath, count) => {
+ipcMain.handle('git:graphLog', async (event, projectPath, count) => {
   try {
-    const output = execFileSync('git', ['log', '--format=%H|%h|%P|%s|%an|%ar|%D', '-' + (count || 50), '--no-color'], { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
+    const output = await runGit(projectPath, ['log', '--format=%H|%h|%P|%s|%an|%ar|%D', '-' + (count || 50), '--no-color'], 10000);
     return output.trim().split('\n').filter(Boolean).map(line => {
       const parts = line.split('|');
       return {
@@ -725,9 +740,9 @@ ipcMain.handle('git:graphLog', (event, projectPath, count) => {
   }
 });
 
-ipcMain.handle('git:stashList', (event, projectPath) => {
+ipcMain.handle('git:stashList', async (event, projectPath) => {
   try {
-    const output = execFileSync('git', ['stash', 'list', '--no-color'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 });
+    const output = await runGit(projectPath, ['stash', 'list', '--no-color'], 5000);
     return output.trim().split('\n').filter(Boolean).map((line, i) => {
       const match = line.match(/^stash@\{(\d+)\}:\s*(.*)$/);
       return match ? { index: parseInt(match[1]), message: match[2] } : { index: i, message: line };
@@ -737,32 +752,32 @@ ipcMain.handle('git:stashList', (event, projectPath) => {
   }
 });
 
-ipcMain.handle('git:stashPush', (event, projectPath, message) => {
+ipcMain.handle('git:stashPush', async (event, projectPath, message) => {
   try {
     const args = message ? ['stash', 'push', '-m', message] : ['stash', 'push'];
-    execFileSync('git', args, { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
+    await runGit(projectPath, args, 10000);
     return { success: true };
   } catch (err) {
     return { success: false, error: (err.stderr || err.message).toString().trim() };
   }
 });
 
-ipcMain.handle('git:stashPop', (event, projectPath) => {
+ipcMain.handle('git:stashPop', async (event, projectPath) => {
   try {
-    execFileSync('git', ['stash', 'pop'], { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
+    await runGit(projectPath, ['stash', 'pop'], 10000);
     return { success: true };
   } catch (err) {
     return { success: false, error: (err.stderr || err.message).toString().trim() };
   }
 });
 
-ipcMain.handle('git:commitDetail', (event, projectPath, hash) => {
+ipcMain.handle('git:commitDetail', async (event, projectPath, hash) => {
   try {
-    // Get metadata
-    const metaOutput = execFileSync('git', ['show', '--format=%H|%s|%an|%aI', '-s', hash, '--no-color'], { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
+    const [metaOutput, statOutput] = await Promise.all([
+      runGit(projectPath, ['show', '--format=%H|%s|%an|%aI', '-s', hash, '--no-color'], 10000),
+      runGit(projectPath, ['show', '--numstat', '--format=', hash, '--no-color'], 10000)
+    ]);
     const meta = metaOutput.trim().split('|');
-    // Get file stats with --numstat for exact counts and full paths
-    const statOutput = execFileSync('git', ['show', '--numstat', '--format=', hash, '--no-color'], { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
     const files = [];
     const statLines = statOutput.trim().split('\n').filter(Boolean);
     for (let i = 0; i < statLines.length; i++) {
@@ -781,24 +796,22 @@ ipcMain.handle('git:commitDetail', (event, projectPath, hash) => {
   }
 });
 
-ipcMain.handle('git:diffCommit', (event, projectPath, hash, filePath) => {
+ipcMain.handle('git:diffCommit', async (event, projectPath, hash, filePath) => {
   try {
-    // git show with --pretty suppresses commit metadata, leaving only the diff
     const args = filePath
       ? ['show', '--pretty=format:', '-p', hash, '--', filePath]
       : ['show', '--pretty=format:', '-p', hash];
-    const output = execFileSync('git', args, { cwd: projectPath, encoding: 'utf8', timeout: 10000 });
-    // Strip leading blank lines that --pretty=format: sometimes produces
+    const output = await runGit(projectPath, args, 10000);
     return output.replace(/^\n+/, '');
   } catch {
     return '';
   }
 });
 
-ipcMain.handle('git:diffStat', (event, projectPath, staged) => {
+ipcMain.handle('git:diffStat', async (event, projectPath, staged) => {
   try {
     const args = staged ? ['diff', '--numstat', '--cached'] : ['diff', '--numstat'];
-    const output = execFileSync('git', args, { cwd: projectPath, encoding: 'utf8', timeout: 5000 });
+    const output = await runGit(projectPath, args, 5000);
     return output.trim().split('\n').filter(Boolean).map(line => {
       const parts = line.split('\t');
       return {
