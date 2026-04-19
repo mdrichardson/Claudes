@@ -30,6 +30,24 @@ function fetchCounts() {
     return { releases, totalExe, totalYml };
 }
 
+function fetchJson(endpoint) {
+    try {
+        const raw = execFileSync('gh', ['api', `repos/${REPO}/${endpoint}`], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
+        return JSON.parse(raw);
+    } catch {
+        return null;
+    }
+}
+
+function fetchTraffic() {
+    return {
+        views: fetchJson('traffic/views'),
+        clones: fetchJson('traffic/clones'),
+        referrers: fetchJson('traffic/popular/referrers'),
+        paths: fetchJson('traffic/popular/paths'),
+    };
+}
+
 function loadStats() {
     try {
         return JSON.parse(fs.readFileSync(STATS_FILE, 'utf-8'));
@@ -75,10 +93,37 @@ function printTable(label, current, baseline) {
     }
 }
 
+function printTraffic(traffic) {
+    const { views, clones, referrers, paths } = traffic;
+    if (!views && !clones) return;
+
+    console.log(`\n  Traffic (GitHub, last 14 days):`);
+    if (views) {
+        console.log(`    Page views:     ${views.count} total, ${views.uniques} unique visitors`);
+    }
+    if (clones) {
+        console.log(`    Git clones:     ${clones.count} total, ${clones.uniques} unique cloners`);
+    }
+    if (referrers && referrers.length > 0) {
+        console.log(`    Top referrers:`);
+        for (const r of referrers.slice(0, 5)) {
+            console.log(`      ${r.referrer}: ${r.count} views (${r.uniques} unique)`);
+        }
+    }
+    if (paths && paths.length > 0) {
+        console.log(`    Top paths:`);
+        for (const p of paths.slice(0, 5)) {
+            const title = (p.title || p.path).slice(0, 50);
+            console.log(`      ${title}: ${p.count} views (${p.uniques} unique)`);
+        }
+    }
+}
+
 // Main
 const arg = process.argv[2];
 const now = new Date();
 const current = fetchCounts();
+const traffic = fetchTraffic();
 const stats = loadStats();
 
 console.log('\n  Claudes Download Stats');
@@ -123,12 +168,18 @@ if (arg) {
     }
 }
 
+printTraffic(traffic);
+
 // Save snapshot
 stats.snapshots.push({
     timestamp: now.toISOString(),
     totalExe: current.totalExe,
     totalYml: current.totalYml,
-    releases: current.releases
+    releases: current.releases,
+    traffic: {
+        views: traffic.views ? { count: traffic.views.count, uniques: traffic.views.uniques } : null,
+        clones: traffic.clones ? { count: traffic.clones.count, uniques: traffic.clones.uniques } : null,
+    },
 });
 
 // Keep max 1000 snapshots
