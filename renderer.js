@@ -612,7 +612,19 @@ function loadProjects() {
         showEmptyState();
         return;
       }
-      setActiveProject(idx, true);
+      // Prefer a live pty transfer from the other window (preserves running
+      // claude processes) over rehydrating from sessions.json.
+      if (window.electronAPI && window.electronAPI.popoutTakeTransfer) {
+        window.electronAPI.popoutTakeTransfer(popoutProjectKey).then(function (transfer) {
+          if (transfer && transfer.length > 0) {
+            applyTransferredColumns(idx, transfer);
+          } else {
+            setActiveProject(idx, true);
+          }
+        });
+      } else {
+        setActiveProject(idx, true);
+      }
       return;
     }
 
@@ -697,16 +709,25 @@ function prepareAndPopOut(projectPath) {
     return;
   }
   var state = projectStates.get(projectPath);
-  var snapshot = [];
+  var transfer = [];
   if (state) {
-    state.columns.forEach(function (col) {
-      if (col && col.sessionId) {
-        snapshot.push({ sessionId: col.sessionId, title: col.customTitle || null });
-      }
+    state.columns.forEach(function (col, id) {
+      transfer.push({
+        ptyId: id,
+        cols: col.terminal ? col.terminal.cols : 120,
+        rows: col.terminal ? col.terminal.rows : 30,
+        cwd: col.cwd || projectPath,
+        cmd: col.cmd || null,
+        cmdArgs: col.cmdArgs || [],
+        env: col.env || null,
+        sessionId: col.sessionId || null,
+        title: col.customTitle || null,
+        isDiff: !!col.isDiff
+      });
     });
 
     var ids = Array.from(state.columns.keys());
-    ids.forEach(function (id) { removeColumn(id); });
+    ids.forEach(function (id) { disposeColumnLocalOnly(id); });
 
     if (state.containerEl) state.containerEl.remove();
     projectStates.delete(projectPath);
@@ -714,58 +735,129 @@ function prepareAndPopOut(projectPath) {
       activeProjectKey = null;
     }
   }
-  window.electronAPI.saveSessions(projectPath, snapshot).then(function () {
-    window.electronAPI.popOutProject(projectPath);
+  window.electronAPI.popoutSetTransfer(projectPath, transfer).then(function () {
+    return window.electronAPI.popOutProject(projectPath);
   });
+}
+
+// Invoked from main.js via webContents.executeJavaScript during popout close.
+// Collects this window's columns for the active project so main can reattach.
+window.collectPopoutTransferForClose = function () {
+  if (!popoutMode || !popoutProjectKey) return [];
+  var state = projectStates.get(popoutProjectKey);
+  if (!state) return [];
+  var list = [];
+  state.columns.forEach(function (col, id) {
+    list.push({
+      ptyId: id,
+      cols: col.terminal ? col.terminal.cols : 120,
+      rows: col.terminal ? col.terminal.rows : 30,
+      cwd: col.cwd || popoutProjectKey,
+      cmd: col.cmd || null,
+      cmdArgs: col.cmdArgs || [],
+      env: col.env || null,
+      sessionId: col.sessionId || null,
+      title: col.customTitle || null,
+      isDiff: !!col.isDiff
+    });
+  });
+  return list;
+};
+
+function applyTransferredColumns(projIdx, transfer) {
+  // Called when a window receives a pty transfer from another window.
+  // Creates the project's columns by reattaching to the existing pty ids
+  // instead of spawning fresh claude processes — preserves running state.
+  //
+  // Populate state first, THEN call setActiveProject. Doing it in that order
+  // means setActiveProject sees state.columns.size > 0 and skips its default
+  // "spawn a blank column" path for empty projects.
+  var project = config.projects[projIdx];
+  if (!project) return;
+
+  var prevActive = activeProjectKey;
+  activeProjectKey = project.path; // addColumn targets activeProjectKey
+  getOrCreateProjectState(project.path);
+
+  transfer.forEach(function (entry) {
+    addColumn(entry.cmdArgs || [], null, {
+      reattachPtyId: entry.ptyId,
+      sessionId: entry.sessionId,
+      title: entry.title,
+      cmd: entry.cmd,
+      env: entry.env,
+      cwd: entry.cwd,
+      isDiff: entry.isDiff
+    });
+  });
+
+  activeProjectKey = prevActive;
+  setActiveProject(projIdx, false);
+  persistSessions(project.path);
+}
+
+function disposeColumnLocalOnly(id) {
+  // Like removeColumn, but keeps the pty alive in pty-server (no kill) and
+  // does not rewrite sessions.json. Used when transferring a column to another
+  // window: the popout will reattach to the same pty id.
+  var col = allColumns.get(id);
+  if (!col) return;
+  if (maximizedColumnId === id) toggleMaximizeColumn(id);
+  var timer = activityTimers.get(id);
+  if (timer) clearTimeout(timer);
+  activityTimers.delete(id);
+  stopSessionSync(id);
+
+  var colElement = col.element;
+  var prevSibling = colElement.previousElementSibling;
+  var nextSibling = colElement.nextElementSibling;
+  colElement.remove();
+  if (prevSibling && prevSibling.classList.contains('resize-handle')) {
+    prevSibling.remove();
+  } else if (nextSibling && nextSibling.classList.contains('resize-handle')) {
+    nextSibling.remove();
+  }
+
+  if (col.terminal) col.terminal.dispose();
+  allColumns.delete(id);
+
+  var state = projectStates.get(col.projectKey);
+  if (state) {
+    state.columns.delete(id);
+    for (var r = 0; r < state.rows.length; r++) {
+      var idx = state.rows[r].columnIds.indexOf(id);
+      if (idx !== -1) {
+        state.rows[r].columnIds.splice(idx, 1);
+        removeRowIfEmpty(state, state.rows[r]);
+        break;
+      }
+    }
+    if (state.focusedColumnId === id) state.focusedColumnId = null;
+  }
 }
 
 function handleProjectPoppedIn(projectPath) {
   // Popout window for this project just closed. Bring its content back to main:
-  // switch main to the project, and if main already had some columns for it,
-  // append any sessions that lived only in the popout (sessions.json is the
-  // source of truth — the popout persisted its state on every spawn/kill).
+  // if the popout handed over a pty transfer, reattach those ptys in main
+  // (preserves running claude processes). Otherwise fall back to rehydrating
+  // from sessions.json.
   var idx = -1;
   for (var i = 0; i < config.projects.length; i++) {
     if (config.projects[i].path === projectPath) { idx = i; break; }
   }
   if (idx < 0) return;
 
-  var prevState = projectStates.get(projectPath);
-  var hadColumns = prevState && prevState.columns && prevState.columns.size > 0;
-
-  setActiveProject(idx, true);
-
-  if (hadColumns) {
-    mergePoppedInProjectSessions(projectPath);
-  }
-}
-
-function mergePoppedInProjectSessions(projectPath) {
-  if (!window.electronAPI || !window.electronAPI.loadSessions) return;
-  window.electronAPI.loadSessions(projectPath).then(function (savedSessions) {
-    var state = projectStates.get(projectPath);
-    if (!state) return;
-    var existing = {};
-    state.columns.forEach(function (col) {
-      if (col && col.sessionId) existing[col.sessionId] = true;
+  if (window.electronAPI && window.electronAPI.popoutTakeTransfer) {
+    window.electronAPI.popoutTakeTransfer(projectPath).then(function (transfer) {
+      if (transfer && transfer.length > 0) {
+        applyTransferredColumns(idx, transfer);
+      } else {
+        setActiveProject(idx, true);
+      }
     });
-    var prevActive = activeProjectKey;
-    // addColumn uses activeProjectKey implicitly — temporarily swap so columns
-    // land in the right project's row container.
-    activeProjectKey = projectPath;
-    try {
-      var spawnArgs = buildSpawnArgs();
-      (savedSessions || []).forEach(function (entry) {
-        var sid = typeof entry === 'string' ? entry : (entry && entry.sessionId);
-        var title = entry && typeof entry === 'object' ? entry.title : null;
-        if (sid && !existing[sid]) {
-          addColumn(spawnArgs.concat(['--resume', sid]), null, title ? { title: title } : {});
-        }
-      });
-    } finally {
-      activeProjectKey = prevActive;
-    }
-  });
+  } else {
+    setActiveProject(idx, true);
+  }
 }
 
 function saveConfig() {
@@ -1585,7 +1677,13 @@ function addColumn(args, targetRow, opts) {
     row = addRowToProject(state);
   }
 
-  var id = ++globalColumnId;
+  var id;
+  if (opts.reattachPtyId != null) {
+    id = opts.reattachPtyId;
+    if (id > globalColumnId) globalColumnId = id;
+  } else {
+    id = ++globalColumnId;
+  }
 
   // Add column resize handle if there are existing columns in this row
   if (row.columnIds.length > 0) {
@@ -1702,6 +1800,11 @@ function addColumn(args, targetRow, opts) {
 
   requestAnimationFrame(function () {
     fitAddon.fit();
+    if (opts.reattachPtyId != null) {
+      // Pty already exists in pty-server — just rebind it to this window's WS.
+      wsSend({ type: 'reattach', id: id, cols: terminal.cols, rows: terminal.rows });
+      return;
+    }
     var sendMsg = { type: 'create', id: id, cols: terminal.cols, rows: terminal.rows, cwd: cwd, args: claudeArgs };
     if (cmd) sendMsg.cmd = cmd;
     if (opts.env) sendMsg.env = opts.env;
@@ -1760,8 +1863,8 @@ function addColumn(args, targetRow, opts) {
     removeColumn(id);
   });
 
-  // Extract session ID if resuming
-  var resumeSessionId = null;
+  // Extract session ID if resuming, or take from opts for a reattach transfer.
+  var resumeSessionId = opts.sessionId || null;
   for (var ai = 0; ai < claudeArgs.length - 1; ai++) {
     if (claudeArgs[ai] === '--resume') { resumeSessionId = claudeArgs[ai + 1]; break; }
   }

@@ -369,6 +369,11 @@ function createWindow() {
 // Registry of open popout windows keyed by project path.
 const popoutWindows = new Map();
 
+// Short-lived store of column-transfer data between main and popout windows.
+// The sending side writes here before requesting the pop-out (or before close);
+// the receiving side reads and deletes here on startup / pop-in.
+const pendingPopoutTransfers = new Map();
+
 function createProjectWindow(projectKey) {
   if (popoutWindows.has(projectKey)) {
     const existing = popoutWindows.get(projectKey);
@@ -418,9 +423,27 @@ function createProjectWindow(projectKey) {
   win.on('move', saveBoundsDebounced);
   win.on('resize', saveBoundsDebounced);
 
-  win.on('close', () => {
+  win.on('close', (event) => {
     if (win.isDestroyed()) return;
     if (win._skipCloseBookkeeping) return;
+
+    // First pass: pause the close, collect transfer data from the popout so
+    // main can reattach to its ptys, persist it, then allow the close to
+    // proceed on the second entry into this handler.
+    if (!win._transferCollected && !isQuitting) {
+      event.preventDefault();
+      win._transferCollected = true;
+      const collectJs = 'typeof collectPopoutTransferForClose === "function" ? collectPopoutTransferForClose() : []';
+      win.webContents.executeJavaScript(collectJs, true).then((transfer) => {
+        if (transfer && transfer.length > 0) {
+          pendingPopoutTransfers.set(projectKey, transfer);
+        }
+      }).catch(() => {}).finally(() => {
+        if (!win.isDestroyed()) win.close();
+      });
+      return;
+    }
+
     try {
       const b = win.getBounds();
       const cfg = readConfig();
@@ -497,6 +520,20 @@ ipcMain.handle('config:getProjects', () => {
 
 ipcMain.handle('config:saveProjects', (event, config) => {
   scheduleWriteConfig(config);
+});
+
+ipcMain.handle('popout:setTransfer', (event, projectKey, transferList) => {
+  if (transferList && transferList.length > 0) {
+    pendingPopoutTransfers.set(projectKey, transferList);
+  } else {
+    pendingPopoutTransfers.delete(projectKey);
+  }
+});
+
+ipcMain.handle('popout:takeTransfer', (event, projectKey) => {
+  const list = pendingPopoutTransfers.get(projectKey);
+  pendingPopoutTransfers.delete(projectKey);
+  return list || null;
 });
 
 ipcMain.handle('project:popOut', (event, projectKey) => {
