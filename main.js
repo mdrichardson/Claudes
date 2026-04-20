@@ -18,7 +18,10 @@ const ptyPort = app.isPackaged ? 3456 : 3457;
 let ptyServerProcess;
 
 const CONFIG_DIR = path.join(os.homedir(), '.claudes');
-const CONFIG_FILE = path.join(CONFIG_DIR, 'projects.json');
+// Dev builds use a separate projects file so running dev alongside an
+// installed production instance doesn't let the two fight over the same
+// config (last-write-wins → surprising "deleted project came back" bugs).
+const CONFIG_FILE = path.join(CONFIG_DIR, app.isPackaged ? 'projects.json' : 'projects-dev.json');
 const LOOPS_FILE = path.join(CONFIG_DIR, 'loops.json');
 const LOOPS_RUNS_DIR = path.join(CONFIG_DIR, 'loop-runs');
 const AUTOMATIONS_FILE = path.join(CONFIG_DIR, 'automations.json');
