@@ -350,7 +350,12 @@ function createWindow() {
   });
 
   nativeTheme.on('updated', () => {
-    mainWindow?.webContents.send('theme:osChanged', nativeTheme.shouldUseDarkColors);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('theme:osChanged', nativeTheme.shouldUseDarkColors);
+    }
+    for (const win of popoutWindows.values()) {
+      if (!win.isDestroyed()) win.webContents.send('theme:osChanged', nativeTheme.shouldUseDarkColors);
+    }
   });
 }
 
@@ -539,14 +544,17 @@ ipcMain.handle('app:setStartWithOS', (event, enabled) => {
 });
 
 ipcMain.handle('theme:setTitleBarOverlay', (event, colors) => {
-  if (mainWindow) {
-    mainWindow.setTitleBarOverlay({
+  const apply = (win) => {
+    if (!win || win.isDestroyed()) return;
+    win.setTitleBarOverlay({
       color: colors.color,
       symbolColor: colors.symbolColor,
       height: 40
     });
-    mainWindow.setBackgroundColor(colors.color);
-  }
+    win.setBackgroundColor(colors.color);
+  };
+  apply(mainWindow);
+  for (const win of popoutWindows.values()) apply(win);
 });
 
 // --- Session Management ---
