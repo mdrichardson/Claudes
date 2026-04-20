@@ -406,6 +406,25 @@ function createProjectWindow(projectKey) {
   win.on('move', saveBoundsDebounced);
   win.on('resize', saveBoundsDebounced);
 
+  win.on('close', () => {
+    if (win.isDestroyed()) return;
+    try {
+      const b = win.getBounds();
+      const cfg = readConfig();
+      const p = cfg.projects.find((x) => x.path === projectKey);
+      if (p) {
+        p.popoutBounds = { x: b.x, y: b.y, width: b.width, height: b.height };
+        if (!isQuitting) {
+          p.poppedOut = false;
+        }
+        scheduleWriteConfig(cfg);
+        broadcastConfigUpdated(cfg);
+      }
+    } catch (err) {
+      console.error('popout close bookkeeping failed:', err);
+    }
+  });
+
   win.on('closed', () => {
     popoutWindows.delete(projectKey);
   });
