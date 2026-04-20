@@ -634,14 +634,18 @@ function loadProjects() {
 if (window.electronAPI && window.electronAPI.onConfigUpdated) {
   window.electronAPI.onConfigUpdated(function (newCfg) {
     if (!newCfg) return;
-    // Detect projects transitioning poppedOut: true -> false (popout window just closed).
+    // Detect transitions: true -> false is pop-in (window closed, content
+    // returns to main). false -> true is pop-out (window opened, main should
+    // hand its columns off so the popout owns them).
     var justPoppedIn = [];
+    var justPoppedOut = [];
     var oldMap = {};
     (config.projects || []).forEach(function (p) { if (p) oldMap[p.path] = !!p.poppedOut; });
     (newCfg.projects || []).forEach(function (p) {
-      if (p && oldMap[p.path] === true && p.poppedOut === false) {
-        justPoppedIn.push(p.path);
-      }
+      if (!p) return;
+      var was = oldMap[p.path];
+      if (was === true && p.poppedOut === false) justPoppedIn.push(p.path);
+      else if (was === false && p.poppedOut === true) justPoppedOut.push(p.path);
     });
 
     config = newCfg;
@@ -652,6 +656,12 @@ if (window.electronAPI && window.electronAPI.onConfigUpdated) {
         document.title = 'Claudes \u2013 ' + p.name;
       }
     } else {
+      // Hand off columns BEFORE rendering / switching, so any new active
+      // project can safely take over without stale state still around.
+      justPoppedOut.forEach(function (projectPath) {
+        disposeMainColumnsForPopout(projectPath);
+      });
+
       renderProjectList();
       if (config.activeProjectIndex >= 0) {
         var cur = config.projects[config.activeProjectIndex];
@@ -674,6 +684,36 @@ if (window.electronAPI && window.electronAPI.onConfigUpdated) {
       });
     }
   });
+}
+
+function disposeMainColumnsForPopout(projectPath) {
+  // User just popped this project out. Move its columns to the new window:
+  // tear down main's local state (xterms, DOM, ptys) but keep sessions.json
+  // intact so the popout can hydrate from it. removeColumn() rewrites
+  // sessions.json as it goes, which would empty it before the popout loads —
+  // snapshot the session list up front and restore it afterwards.
+  var state = projectStates.get(projectPath);
+  if (!state) return;
+
+  var snapshot = [];
+  state.columns.forEach(function (col) {
+    if (col && col.sessionId) {
+      snapshot.push({ sessionId: col.sessionId, title: col.customTitle || null });
+    }
+  });
+
+  var ids = Array.from(state.columns.keys());
+  ids.forEach(function (id) { removeColumn(id); });
+
+  if (window.electronAPI && window.electronAPI.saveSessions) {
+    window.electronAPI.saveSessions(projectPath, snapshot);
+  }
+
+  if (state.containerEl) state.containerEl.remove();
+  projectStates.delete(projectPath);
+  if (activeProjectKey === projectPath) {
+    activeProjectKey = null;
+  }
 }
 
 function handleProjectPoppedIn(projectPath) {
