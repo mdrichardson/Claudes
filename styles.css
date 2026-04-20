@@ -4971,3 +4971,11 @@ html, body {
   border-top: none;
   margin-top: 0;
 }
+
+/* === Popout window mode === */
+
+body.mode-popout #sidebar,
+body.mode-popout #sidebar-resize-handle,
+body.mode-popout #btn-add-project {
+  display: none !important;
+}
