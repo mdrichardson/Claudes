@@ -3299,6 +3299,11 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  for (const win of popoutWindows.values()) {
+    if (!win.isDestroyed()) {
+      try { win.close(); } catch {}
+    }
+  }
   flushPendingConfig();
   stopAutomationScheduler();
   if (ptyServerProcess) {
