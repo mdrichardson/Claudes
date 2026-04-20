@@ -3268,9 +3268,19 @@ if (!gotLock) {
     migrateLoopsToAutomations();
     startAutomationScheduler();
 
+    const cfg = readConfig();
+    for (const p of cfg.projects) {
+      if (p.poppedOut) {
+        createProjectWindow(p.path);
+      }
+    }
+
     powerMonitor.on('resume', () => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('power:resume');
+      }
+      for (const win of popoutWindows.values()) {
+        if (!win.isDestroyed()) win.webContents.send('power:resume');
       }
     });
   });
