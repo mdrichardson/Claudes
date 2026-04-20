@@ -354,6 +354,98 @@ function createWindow() {
   });
 }
 
+// Registry of open popout windows keyed by project path.
+const popoutWindows = new Map();
+
+function createProjectWindow(projectKey) {
+  if (popoutWindows.has(projectKey)) {
+    const existing = popoutWindows.get(projectKey);
+    if (!existing.isDestroyed()) {
+      existing.show();
+      existing.focus();
+      return existing;
+    }
+    popoutWindows.delete(projectKey);
+  }
+
+  const config = readConfig();
+  const project = config.projects.find((p) => p.path === projectKey);
+  if (!project) return null;
+
+  const isLight = config.theme === 'auto' ? !nativeTheme.shouldUseDarkColors : config.theme === 'light';
+  const bounds = project.popoutBounds || {};
+
+  const win = new BrowserWindow({
+    width: bounds.width || 1200,
+    height: bounds.height || 800,
+    x: typeof bounds.x === 'number' ? bounds.x : undefined,
+    y: typeof bounds.y === 'number' ? bounds.y : undefined,
+    minWidth: 600,
+    minHeight: 400,
+    title: 'Claudes \u2013 ' + (project.name || projectKey),
+    icon: path.join(__dirname, process.platform === 'win32' ? 'icon-tray.ico' : 'icon.png'),
+    backgroundColor: isLight ? '#ffffff' : '#1a1a2e',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: isLight ? '#e8ecf1' : '#16213e',
+      symbolColor: isLight ? '#1f2328' : '#e0e0e0',
+      height: 40
+    },
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+
+  win.loadFile('index.html', {
+    query: { mode: 'popout', projectKey: projectKey }
+  });
+
+  const saveBoundsDebounced = debouncePopoutBounds(projectKey, win);
+  win.on('move', saveBoundsDebounced);
+  win.on('resize', saveBoundsDebounced);
+
+  win.on('closed', () => {
+    popoutWindows.delete(projectKey);
+  });
+
+  popoutWindows.set(projectKey, win);
+  return win;
+}
+
+// Per-window debounce for bounds persistence so drag events don't flood writeConfig.
+const POPOUT_BOUNDS_DEBOUNCE_MS = 300;
+function debouncePopoutBounds(projectKey, win) {
+  let timer = null;
+  return function () {
+    if (win.isDestroyed()) return;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      if (win.isDestroyed()) return;
+      const b = win.getBounds();
+      const cfg = readConfig();
+      const p = cfg.projects.find((x) => x.path === projectKey);
+      if (!p) return;
+      p.popoutBounds = { x: b.x, y: b.y, width: b.width, height: b.height };
+      scheduleWriteConfig(cfg);
+      broadcastConfigUpdated(cfg);
+    }, POPOUT_BOUNDS_DEBOUNCE_MS);
+  };
+}
+
+function broadcastConfigUpdated(config) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('config:updated', config);
+  }
+  for (const win of popoutWindows.values()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send('config:updated', config);
+    }
+  }
+}
+
 // --- IPC Handlers ---
 
 ipcMain.handle('dialog:openDirectory', async () => {
