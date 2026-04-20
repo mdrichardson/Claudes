@@ -946,7 +946,9 @@ function renderProjectList() {
   if (!config.collapsedGroups) config.collapsedGroups = {};
   var sortMode = config.projectSortMode || 'manual';
 
-  var allEntries = config.projects.map(function (p, i) { return { project: p, index: i }; });
+  var allEntries = config.projects
+    .map(function (p, i) { return { project: p, index: i }; })
+    .filter(function (e) { return !e.project.poppedOut; });
   var pinnedEntries = allEntries.filter(function (e) { return e.project.pinned; });
   var unpinnedEntries = allEntries.filter(function (e) { return !e.project.pinned; });
 
