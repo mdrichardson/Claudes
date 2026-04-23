@@ -5104,3 +5104,24 @@ body.mode-popout #btn-add-project {
 .project-item.popped-out:hover {
   cursor: pointer;
 }
+
+.automations-flyout-action {
+  background: transparent;
+  color: #ccc;
+  border: none;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.automations-flyout-action:hover { color: #fff; }
+.automations-runwindow-indicator {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #4caf50;
+  pointer-events: none;
+}
+.automations-runwindow-indicator.hidden { display: none; }
