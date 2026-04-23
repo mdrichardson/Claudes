@@ -6516,6 +6516,15 @@ function escapeHtml(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+function runWindowBadgeHtml(auto) {
+  if (!auto || !auto.runWindow || !auto.runWindow.enabled) return '';
+  var w = auto.runWindow;
+  var pad = function (n) { return String(n).padStart(2, '0'); };
+  var days = (w.days || []).join(', ');
+  var title = 'Runs ' + pad(w.startHour) + ':' + pad(w.startMinute || 0) + '–' + pad(w.endHour) + ':' + pad(w.endMinute || 0) + ' on ' + days;
+  return '<span class="automation-runwindow-badge" title="' + title + '">⏰</span>';
+}
+
 // ============================================================
 // Automations Tab
 // ============================================================
@@ -6693,6 +6702,7 @@ function renderAutomationCards(automations, container) {
         summaryHtml + attentionHtml +
         '<div class="automation-card-footer">' +
           '<span class="automation-status-badge ' + badgeClass + '">' + badgeText + '</span>' +
+          runWindowBadgeHtml(automation) +
           actionsHtml +
         '</div>';
     } else {
@@ -6724,6 +6734,7 @@ function renderAutomationCards(automations, container) {
         '</div>' + dotsHtml +
         '<div class="automation-card-footer">' +
           '<span class="automation-status-badge ' + badgeClass + '">' + badgeText + '</span>' +
+          runWindowBadgeHtml(automation) +
           actionsHtml2 +
         '</div>';
     }
@@ -8520,6 +8531,7 @@ function refreshAutomationsFlyout() {
         row.innerHTML = '<div class="automations-flyout-row-header">' +
           '<span>' + escapeHtml(displayName) + (isSimple ? '' : ' <span style="opacity:0.5">(' + auto.agents.length + ' agents)</span>') + '</span>' +
           '<span class="automations-flyout-row-status" style="color:' + statusColor + '">' + statusText + '</span>' +
+          runWindowBadgeHtml(auto) +
           '</div>' +
           pipelineDotsHtml +
           '<div class="automations-flyout-row-expanded">' +

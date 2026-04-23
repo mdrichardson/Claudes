@@ -5240,3 +5240,11 @@ body.mode-popout #btn-add-project {
 .automation-runwindow-times input[type="time"] {
   background: #111; color: #eee; border: 1px solid #333; padding: 2px 4px;
 }
+
+.automation-runwindow-badge {
+  display: inline-block;
+  margin-left: 4px;
+  color: #8a8;
+  font-size: 10px;
+  cursor: help;
+}
