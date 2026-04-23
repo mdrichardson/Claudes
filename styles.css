@@ -5208,3 +5208,35 @@ body.mode-popout #btn-add-project {
 }
 .automations-runwindow-strip.active .automations-runwindow-strip-dot { background: #4caf50; }
 .automations-runwindow-strip.paused .automations-runwindow-strip-dot { background: #ff9800; }
+
+/* === Run Window Modal Section === */
+.automation-runwindow-section {
+  border: 1px solid #2a2a3a;
+  border-radius: 4px;
+  padding: 8px;
+  margin-bottom: 12px;
+  background: #141421;
+}
+.automation-runwindow-toggle {
+  background: transparent;
+  border: none;
+  color: #ddd;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.automation-runwindow-chevron {
+  transition: transform 120ms;
+  display: inline-block;
+}
+.automation-runwindow-section.expanded .automation-runwindow-chevron {
+  transform: rotate(90deg);
+}
+.automation-runwindow-body { margin-top: 8px; }
+.automation-runwindow-times { display: flex; gap: 12px; }
+.automation-runwindow-times input[type="time"] {
+  background: #111; color: #eee; border: 1px solid #333; padding: 2px 4px;
+}

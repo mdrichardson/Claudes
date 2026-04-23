@@ -417,6 +417,37 @@
             <input type="text" id="automation-name" class="automation-input" placeholder="e.g. TaskBoard Pipeline" spellcheck="false">
           </div>
 
+          <!-- Run window (optional) -->
+          <div id="automation-runwindow-section" class="automation-runwindow-section">
+            <button type="button" id="automation-runwindow-toggle" class="automation-runwindow-toggle">
+              <span class="automation-runwindow-chevron">&#9656;</span>
+              Run window (optional)
+            </button>
+            <div id="automation-runwindow-body" class="automation-runwindow-body" style="display:none;">
+              <label class="automation-permission-option">
+                <input type="checkbox" id="automation-runwindow-enabled">
+                <span>Restrict when this automation can run</span>
+              </label>
+              <div id="automation-runwindow-fields" style="display:none;margin-top:8px;">
+                <div class="automation-form-group automation-runwindow-times">
+                  <label>From <input type="time" id="automation-runwindow-start" value="09:00"></label>
+                  <label>To <input type="time" id="automation-runwindow-end" value="17:00"></label>
+                </div>
+                <div class="runwindow-days" id="automation-runwindow-days">
+                  <label><input type="checkbox" data-day="mon" checked> M</label>
+                  <label><input type="checkbox" data-day="tue" checked> T</label>
+                  <label><input type="checkbox" data-day="wed" checked> W</label>
+                  <label><input type="checkbox" data-day="thu" checked> T</label>
+                  <label><input type="checkbox" data-day="fri" checked> F</label>
+                  <label><input type="checkbox" data-day="sat"> S</label>
+                  <label><input type="checkbox" data-day="sun"> S</label>
+                </div>
+                <div id="automation-runwindow-error" class="runwindow-error" style="display:none;"></div>
+                <div class="automation-permission-hint" style="margin-top:4px;">Intersects with the global run window.</div>
+              </div>
+            </div>
+          </div>
+
           <!-- Agent cards container -->
           <div id="automation-agents-list"></div>
 
