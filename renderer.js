@@ -3285,6 +3285,14 @@ function stopSessionSync(columnId) {
   }
 }
 
+// Per-projectKey promise chain so concurrent persistSessions calls for the
+// SAME file (different workspaces of the same project) serialize rather than
+// race. Without this, two quick persists each load the same stale blob,
+// mutate disjoint keys, and the later save overwrites the earlier save's
+// mutation with its own cold-read copy — data loss for whichever workspace's
+// update landed first.
+var persistChain = new Map();
+
 // Persist the current column layout for (projectKey, workspaceId) into the
 // single sessions.json blob. Primary (workspaceId null) writes to blob.sessions;
 // sub-workspaces write to blob.workspaces[workspaceId].sessions.
@@ -3292,15 +3300,20 @@ function stopSessionSync(columnId) {
 // Guard: if workspaceId refers to a workspace that's mid-delete (no longer in
 // project.workspaces), skip the write so the delete path's in-memory mutation
 // isn't overwritten by a late column-level persist.
+//
+// Returns a promise that resolves once the write lands — most callers don't
+// await, but the gate uses it for deterministic assertions.
 function persistSessions(projectKey, workspaceId) {
-  if (!window.electronAPI) return;
+  if (!window.electronAPI) return Promise.resolve();
   if (workspaceId != null) {
     var project = config.projects.find(function (p) { return p && p.path === projectKey; });
     if (!project || !Array.isArray(project.workspaces) ||
         !project.workspaces.some(function (w) { return w && w.id === workspaceId; })) {
-      return; // deletion in progress — bail
+      return Promise.resolve(); // deletion in progress — bail
     }
   }
+  // Snapshot sessionData synchronously from the CURRENT in-memory state so
+  // each queued persist captures its invocation-time view.
   var state = projectStates.get(stateKey(projectKey, workspaceId));
   var sessionData = [];
   if (state) {
@@ -3310,17 +3323,31 @@ function persistSessions(projectKey, workspaceId) {
       }
     });
   }
-  window.electronAPI.loadSessions(projectKey).then(function (blob) {
-    if (!blob || typeof blob !== 'object') blob = { sessions: [], workspaces: {} };
-    if (!Array.isArray(blob.sessions)) blob.sessions = [];
-    if (!blob.workspaces || typeof blob.workspaces !== 'object') blob.workspaces = {};
-    if (workspaceId == null) {
-      blob.sessions = sessionData;
-    } else {
-      blob.workspaces[workspaceId] = { sessions: sessionData };
-    }
-    window.electronAPI.saveSessions(projectKey, blob);
+
+  var prev = persistChain.get(projectKey) || Promise.resolve();
+  var next = prev.then(function () {
+    return window.electronAPI.loadSessions(projectKey).then(function (blob) {
+      if (!blob || typeof blob !== 'object') blob = { sessions: [], workspaces: {} };
+      if (!Array.isArray(blob.sessions)) blob.sessions = [];
+      if (!blob.workspaces || typeof blob.workspaces !== 'object') blob.workspaces = {};
+      if (workspaceId == null) {
+        blob.sessions = sessionData;
+      } else {
+        blob.workspaces[workspaceId] = { sessions: sessionData };
+      }
+      return window.electronAPI.saveSessions(projectKey, blob);
+    });
+  }).catch(function (err) {
+    console.error('persistSessions failed:', err);
   });
+  persistChain.set(projectKey, next);
+  // Drop the entry once the tail of the chain resolves, so the Map doesn't
+  // grow unbounded. Only delete if we're still the tail (a later call may
+  // have extended the chain already).
+  next.finally(function () {
+    if (persistChain.get(projectKey) === next) persistChain.delete(projectKey);
+  });
+  return next;
 }
 
 function removeColumn(id) {
