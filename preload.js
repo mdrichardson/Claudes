@@ -115,5 +115,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onManagerStarted: (callback) => ipcRenderer.on('automations:manager-started', (_, data) => callback(data)),
   onManagerCompleted: (callback) => ipcRenderer.on('automations:manager-completed', (_, data) => callback(data)),
   onFocusManager: (callback) => ipcRenderer.on('automations:focus-manager', (_, data) => callback(data)),
+
+  // Headless runs
+  headlessRun: (projectPath, prompt) => ipcRenderer.invoke('headless:run', projectPath, prompt),
+  headlessList: (projectPath) => ipcRenderer.invoke('headless:list', projectPath),
+  headlessGet: (projectPath, runId) => ipcRenderer.invoke('headless:get', projectPath, runId),
+  headlessCancel: (runId) => ipcRenderer.invoke('headless:cancel', runId),
+  headlessDelete: (projectPath, runId) => ipcRenderer.invoke('headless:delete', projectPath, runId),
+  onHeadlessStarted: (callback) => ipcRenderer.on('headless:started', (_, data) => callback(data)),
+  onHeadlessOutput: (callback) => ipcRenderer.on('headless:output', (_, data) => callback(data)),
+  onHeadlessCompleted: (callback) => ipcRenderer.on('headless:completed', (_, data) => callback(data)),
+  onHeadlessFocusRun: (callback) => ipcRenderer.on('headless:focus-run', (_, data) => callback(data)),
   onPowerResume: (callback) => ipcRenderer.on('power:resume', () => callback())
 });
