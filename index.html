@@ -312,6 +312,53 @@
             <span class="settings-hint">Base directory for isolated agent repository clones</span>
           </div>
         </div>
+        <div class="settings-section" id="settings-sharing-group">
+          <h3 class="settings-section-title">Shared automations</h3>
+          <p class="sharing-help">
+            Collaborate on automations with colleagues by connecting to a shared MongoDB database
+            (Cosmos DB for MongoDB vCore or Atlas). Local automations are unaffected.
+          </p>
+
+          <div id="sharing-status-row" class="sharing-status sharing-status-disconnected">
+            <span class="sharing-status-dot"></span>
+            <span class="sharing-status-text">Not configured</span>
+          </div>
+
+          <!-- Connect form: shown when disconnected -->
+          <div id="sharing-connect-form">
+            <label for="sharing-connection-string">Connection string</label>
+            <input
+              type="password"
+              id="sharing-connection-string"
+              placeholder="mongodb+srv://user:password@cluster.mongo.cosmos.azure.com/"
+              autocomplete="off"
+              spellcheck="false"
+            />
+
+            <label for="sharing-db-name">Database name</label>
+            <input type="text" id="sharing-db-name" value="Claudes" />
+
+            <div class="sharing-form-actions">
+              <button id="sharing-connect-btn" type="button">Connect</button>
+            </div>
+
+            <div id="sharing-error" class="sharing-error" hidden></div>
+          </div>
+
+          <!-- Connected info: shown when connected -->
+          <div id="sharing-connected-info" hidden>
+            <div class="sharing-connection-details">
+              <div><span class="sharing-label">Database:</span> <span id="sharing-db-name-display"></span></div>
+              <div><span class="sharing-label">Host:</span> <span id="sharing-host-display"></span></div>
+            </div>
+            <div class="sharing-form-actions">
+              <button id="sharing-change-db-btn" type="button" class="sharing-danger-btn">Change database…</button>
+            </div>
+            <p class="sharing-help-small">
+              Organizations and invites are added in the next phase. For now this only verifies the connection.
+            </p>
+          </div>
+        </div>
       </div>
     </div>
   </div>
