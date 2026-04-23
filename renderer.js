@@ -9412,3 +9412,110 @@ document.getElementById('btn-automation-copy-output').addEventListener('click', 
     updateBar.classList.remove('hidden');
   };
 })();
+
+// --- Shared automations (Settings section) ---
+
+(function initSharingSettings() {
+  const statusRow = document.getElementById('sharing-status-row');
+  if (!statusRow) return; // settings markup not present
+  const statusText = statusRow.querySelector('.sharing-status-text');
+  const connectForm = document.getElementById('sharing-connect-form');
+  const connectedInfo = document.getElementById('sharing-connected-info');
+  const connStringInput = document.getElementById('sharing-connection-string');
+  const dbNameInput = document.getElementById('sharing-db-name');
+  const connectBtn = document.getElementById('sharing-connect-btn');
+  const changeDbBtn = document.getElementById('sharing-change-db-btn');
+  const errorDiv = document.getElementById('sharing-error');
+  const dbDisplay = document.getElementById('sharing-db-name-display');
+  const hostDisplay = document.getElementById('sharing-host-display');
+
+  function setStatusClass(cls) {
+    statusRow.classList.remove(
+      'sharing-status-disconnected',
+      'sharing-status-connecting',
+      'sharing-status-connected',
+      'sharing-status-error'
+    );
+    statusRow.classList.add(cls);
+  }
+
+  function showError(msg) {
+    errorDiv.textContent = msg;
+    errorDiv.hidden = false;
+  }
+
+  function clearError() {
+    errorDiv.textContent = '';
+    errorDiv.hidden = true;
+  }
+
+  function render(state) {
+    switch (state.state) {
+      case 'disconnected':
+        setStatusClass('sharing-status-disconnected');
+        statusText.textContent = 'Not configured';
+        connectForm.hidden = false;
+        connectedInfo.hidden = true;
+        connectBtn.disabled = false;
+        connectBtn.textContent = 'Connect';
+        break;
+      case 'connecting':
+        setStatusClass('sharing-status-connecting');
+        statusText.textContent = 'Connecting…';
+        connectForm.hidden = false;
+        connectedInfo.hidden = true;
+        connectBtn.disabled = true;
+        connectBtn.textContent = 'Connecting…';
+        break;
+      case 'connected':
+        setStatusClass('sharing-status-connected');
+        statusText.textContent = `Connected to ${state.dbName}`;
+        connectForm.hidden = true;
+        connectedInfo.hidden = false;
+        dbDisplay.textContent = state.dbName;
+        hostDisplay.textContent = state.hostRedacted;
+        break;
+      case 'error':
+        setStatusClass('sharing-status-error');
+        statusText.textContent = 'Connection error';
+        connectForm.hidden = false;
+        connectedInfo.hidden = true;
+        connectBtn.disabled = false;
+        connectBtn.textContent = 'Connect';
+        showError(state.error || 'Unknown error');
+        break;
+    }
+    if (state.state !== 'error') clearError();
+  }
+
+  async function refresh() {
+    const state = await window.electronAPI.sharing.getConnectionStatus();
+    render(state);
+  }
+
+  connectBtn.addEventListener('click', async () => {
+    clearError();
+    const connectionString = connStringInput.value;
+    const dbName = dbNameInput.value;
+    const result = await window.electronAPI.sharing.configureConnection({ connectionString, dbName });
+    if (!result.ok) {
+      showError(result.error);
+    } else {
+      // Clear the connection string input — we don't want to keep a plaintext
+      // copy in the DOM after a successful save.
+      connStringInput.value = '';
+    }
+  });
+
+  changeDbBtn.addEventListener('click', async () => {
+    const confirmed = confirm(
+      'Switching the database disconnects you from all current orgs. ' +
+      'Shared automations in the current database will stop appearing. Continue?'
+    );
+    if (!confirmed) return;
+    await window.electronAPI.sharing.clearConnection();
+  });
+
+  window.electronAPI.sharing.onConnectionStateChanged((state) => render(state));
+  refresh();
+})();
