@@ -72,6 +72,74 @@ var automationsForProject = [];
 var allAutomationsData = null;
 var importInProgress = false;
 
+// ============================================================
+// Headless Runs
+// ============================================================
+var headlessChipEl = document.getElementById('headless-chip');
+var headlessChipLabelEl = document.getElementById('headless-chip-label');
+var headlessDockEl = document.getElementById('headless-dock');
+var headlessDockListEl = document.getElementById('headless-dock-list');
+var headlessDockDetailEl = document.getElementById('headless-dock-detail');
+var headlessDockPromptEl = document.getElementById('headless-dock-prompt');
+var headlessDockRunBtn = document.getElementById('headless-dock-run');
+var headlessDockCloseBtn = document.getElementById('headless-dock-close');
+var headlessDockResizeEl = document.getElementById('headless-dock-resize');
+
+// State: per-project cache of runs (index entries) + per-run output buffer (for selected)
+var headlessRunsByProject = {}; // projectPath -> Array<entry>
+var headlessSelectedRunId = null;
+var headlessOutputBuffer = ''; // buffer for currently selected run
+var headlessSeen = new Set(); // runIds whose completion the user has seen (cleared when dock opens)
+
+function getActiveProjectPath() {
+  if (!config || !Array.isArray(config.projects)) return null;
+  var p = config.projects[config.activeProjectIndex];
+  return p ? p.path : null;
+}
+
+function updateHeadlessChip() {
+  var projectPath = getActiveProjectPath();
+  if (!projectPath) { headlessChipEl.classList.add('hidden'); return; }
+  var runs = headlessRunsByProject[projectPath] || [];
+  if (runs.length === 0) { headlessChipEl.classList.add('hidden'); return; }
+
+  var running = runs.filter(function (r) { return r.status === 'running'; }).length;
+  var newlyDone = runs.filter(function (r) {
+    return r.status !== 'running' && !headlessSeen.has(r.runId);
+  }).length;
+  var errored = runs.filter(function (r) { return r.status === 'error'; }).length;
+
+  headlessChipEl.classList.remove('hidden', 'state-running', 'state-done', 'state-new', 'state-error');
+  if (running > 0) {
+    headlessChipEl.classList.add('state-running');
+    headlessChipLabelEl.textContent = running + ' running';
+  } else if (newlyDone > 0) {
+    headlessChipEl.classList.add(errored > 0 ? 'state-error' : 'state-new');
+    headlessChipLabelEl.textContent = runs.length + ' · ' + newlyDone + ' new';
+  } else {
+    headlessChipEl.classList.add('state-done');
+    headlessChipLabelEl.textContent = String(runs.length);
+  }
+}
+
+function loadHeadlessRunsForActiveProject() {
+  var projectPath = getActiveProjectPath();
+  if (!projectPath) { updateHeadlessChip(); return; }
+  window.electronAPI.headlessList(projectPath).then(function (index) {
+    headlessRunsByProject[projectPath] = (index && index.runs) || [];
+    // Mark already-completed runs as seen on initial load, so old results don't
+    // show as "new" after an app restart.
+    for (var i = 0; i < headlessRunsByProject[projectPath].length; i++) {
+      var r = headlessRunsByProject[projectPath][i];
+      if (r.status !== 'running') headlessSeen.add(r.runId);
+    }
+    updateHeadlessChip();
+    if (!headlessDockEl.classList.contains('hidden')) renderHeadlessDock();
+  });
+}
+
+function renderHeadlessDock() { /* populated in Task 13 */ }
+
 var darkTermTheme = {
   background: '#1a1a2e',
   foreground: '#e0e0e0',
@@ -647,6 +715,7 @@ function loadProjects() {
         showEmptyState();
       }
     }
+    loadHeadlessRunsForActiveProject();
   });
 }
 if (window.electronAPI && window.electronAPI.onConfigUpdated) {
@@ -1314,6 +1383,7 @@ function setActiveProject(index, isStartup) {
     }
     refitAll();
   }
+  loadHeadlessRunsForActiveProject();
 }
 
 function restoreProjectSessions(projectPath, project) {
