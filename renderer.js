@@ -24,6 +24,7 @@ var spawnDropdown = document.getElementById('spawn-dropdown');
 var optSkipPermissions = document.getElementById('opt-skip-permissions');
 var optRemoteControl = document.getElementById('opt-remote-control');
 var optBare = document.getElementById('opt-bare');
+var optHeadless = document.getElementById('opt-headless');
 var optModel = document.getElementById('opt-model');
 var optWorktree = document.getElementById('opt-worktree');
 var optCustomArgs = document.getElementById('opt-custom-args');
@@ -5596,6 +5597,13 @@ if (window.electronAPI && window.electronAPI.getHookServerPort) {
 // ============================================================
 
 btnAdd.addEventListener('click', function () {
+  if (optHeadless.checked) {
+    // Consume the transient flag immediately — don't persist it.
+    optHeadless.checked = false;
+    closeSpawnDropdown();
+    openHeadlessDock();
+    return;
+  }
   var args = buildSpawnArgs();
   addColumn(args.length > 0 ? args : null);
 });
