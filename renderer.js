@@ -52,6 +52,8 @@ var activeProjectKey = null;
 
 var config = { projects: [], activeProjectIndex: -1 };
 var projectDragFromIndex = -1; // For sidebar drag-to-reorder
+var workspaceDragFromIndex = -1; // Drag-reorder within a project's sub-workspaces
+var workspaceDragFromProjectPath = null; // Same-project check during drop
 
 var popoutMode = false;
 var popoutProjectKey = null;
@@ -1421,6 +1423,54 @@ function buildWorkspaceItem(project, projectIndex, ws, wsIndex) {
     e.preventDefault();
   });
 
+  // Drag-reorder within the same project only. Cross-project drops are
+  // discarded (dropEffect='none') — out of scope for this feature.
+  wsItem.setAttribute('draggable', 'true');
+  wsItem.addEventListener('dragstart', function (e) {
+    workspaceDragFromIndex = wsIndex;
+    workspaceDragFromProjectPath = project.path;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', '');
+    setTimeout(function () { wsItem.classList.add('dragging'); }, 0);
+  });
+  wsItem.addEventListener('dragend', function () {
+    wsItem.classList.remove('dragging');
+    workspaceDragFromIndex = -1;
+    workspaceDragFromProjectPath = null;
+    document.querySelectorAll('.workspace-item.drag-over').forEach(function (el) {
+      el.classList.remove('drag-over');
+    });
+  });
+  wsItem.addEventListener('dragover', function (e) {
+    if (workspaceDragFromIndex === -1
+        || workspaceDragFromProjectPath !== project.path) {
+      // Wrong-project or non-workspace drag — refuse silently.
+      e.dataTransfer.dropEffect = 'none';
+      return;
+    }
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (workspaceDragFromIndex !== wsIndex) {
+      wsItem.classList.add('drag-over');
+    }
+  });
+  wsItem.addEventListener('dragleave', function () {
+    wsItem.classList.remove('drag-over');
+  });
+  wsItem.addEventListener('drop', function (e) {
+    if (workspaceDragFromProjectPath !== project.path) return;
+    e.preventDefault();
+    wsItem.classList.remove('drag-over');
+    var fromIdx = workspaceDragFromIndex;
+    workspaceDragFromIndex = -1;
+    workspaceDragFromProjectPath = null;
+    if (fromIdx === -1 || fromIdx === wsIndex) return;
+    var moved = project.workspaces.splice(fromIdx, 1)[0];
+    project.workspaces.splice(wsIndex, 0, moved);
+    saveConfig();
+    renderProjectList();
+  });
+
   return wsItem;
 }
 
@@ -1579,6 +1629,12 @@ function buildProjectItem(project, index) {
     });
   });
   item.addEventListener('dragover', function (e) {
+    // Don't paint the project-drop cursor over project cards while a workspace
+    // drag is in flight — workspace drags are same-parent-only.
+    if (workspaceDragFromIndex !== -1) {
+      e.dataTransfer.dropEffect = 'none';
+      return;
+    }
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     if (projectDragFromIndex !== -1 && projectDragFromIndex !== index) {
@@ -1589,6 +1645,10 @@ function buildProjectItem(project, index) {
     item.classList.remove('drag-over');
   });
   item.addEventListener('drop', function (e) {
+    // Same guard — do not accept a workspace being dropped onto a project
+    // card. The workspace's own drop handler will have fired on its row, or
+    // the drop is simply discarded.
+    if (workspaceDragFromIndex !== -1) return;
     e.preventDefault();
     item.classList.remove('drag-over');
     var fromIdx = projectDragFromIndex;

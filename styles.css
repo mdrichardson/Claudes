@@ -5075,11 +5075,13 @@ html, body {
   cursor: grab;
 }
 
-.project-item.dragging {
+.project-item.dragging,
+.workspace-item.dragging {
   opacity: 0.4;
 }
 
-.project-item.drag-over {
+.project-item.drag-over,
+.workspace-item.drag-over {
   border-top: 2px solid var(--accent);
 }
 
