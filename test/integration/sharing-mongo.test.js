@@ -89,3 +89,11 @@ test('testConnection: throws for non-string connectionString', async () => {
     /must be a string/
   );
 });
+
+test('connect: rejects cleanly when server is unreachable', async () => {
+  await assert.rejects(
+    () => connect({ connectionString: 'mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=1500', dbName: 'Claudes' }),
+    /./
+  );
+  assert.equal(getDb(), null);
+});
