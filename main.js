@@ -2532,6 +2532,36 @@ function sendManagerNotification(automation, summary) {
   notif.show();
 }
 
+// Returns true if `now` falls within the configured run window.
+// window: { enabled, startHour, startMinute, endHour, endMinute, days[] } or null/undefined
+// A null/undefined window, or one with enabled=false, imposes no restriction.
+// Overnight windows (end <= start) wrap past midnight; `days` identifies the
+// day the window OPENS.
+function isWithinRunWindow(window, now) {
+  if (!window || !window.enabled) return true;
+  if (!Array.isArray(window.days) || window.days.length === 0) return false;
+
+  var nowDate = (now instanceof Date) ? now : new Date(now);
+  var dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+  var todayKey = dayNames[nowDate.getDay()];
+  var yesterdayKey = dayNames[(nowDate.getDay() + 6) % 7];
+
+  var nowMinutes = nowDate.getHours() * 60 + nowDate.getMinutes();
+  var startMinutes = window.startHour * 60 + (window.startMinute || 0);
+  var endMinutes = window.endHour * 60 + (window.endMinute || 0);
+
+  if (endMinutes > startMinutes) {
+    // Same-day window
+    if (window.days.indexOf(todayKey) === -1) return false;
+    return nowMinutes >= startMinutes && nowMinutes < endMinutes;
+  }
+
+  // Overnight window (end <= start): wraps past midnight
+  if (window.days.indexOf(todayKey) !== -1 && nowMinutes >= startMinutes) return true;
+  if (window.days.indexOf(yesterdayKey) !== -1 && nowMinutes < endMinutes) return true;
+  return false;
+}
+
 function shouldRunAgent(agent, now) {
   if (!agent.enabled) return false;
   if (agent.currentRunStartedAt) return false;
