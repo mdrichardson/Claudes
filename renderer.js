@@ -645,31 +645,23 @@ function updateActivityIndicator(id) {
 
 function updateSidebarActivity() {
   if (popoutMode) return; // sidebar not rendered in popout windows
-  // Count activity states per project
-  var attentionByProject = {};
-  var workingByProject = {};
+  // Bucket counts by (projectKey, workspaceId) — no cross-workspace rollup.
+  // Project card badge reflects Primary-only; each workspace sub-row badge
+  // reflects only its own columns.
+  var attentionByKey = {};
+  var workingByKey = {};
   allColumns.forEach(function (col) {
-    var key = col.projectKey;
+    var k = stateKey(col.projectKey, col.workspaceId);
     if (col.activityState === 'attention') {
-      attentionByProject[key] = (attentionByProject[key] || 0) + 1;
+      attentionByKey[k] = (attentionByKey[k] || 0) + 1;
     }
     if (col.activityState === 'working') {
-      workingByProject[key] = (workingByProject[key] || 0) + 1;
+      workingByKey[k] = (workingByKey[k] || 0) + 1;
     }
   });
 
-  // Apply activity class to existing project badges
-  config.projects.forEach(function (project) {
-    var key = project.path;
-    var item = projectListEl.querySelector('.project-item[data-project-path="' + CSS.escape(key) + '"]');
-    if (!item) return;
-
-    var attention = attentionByProject[key] || 0;
-    var working = workingByProject[key] || 0;
-
-    var badge = item.querySelector('.project-badge');
+  function applyBadge(badge, attention, working) {
     if (!badge) return;
-
     badge.classList.remove('badge-attention', 'badge-working');
     if (attention > 0) {
       badge.classList.add('badge-attention');
@@ -679,6 +671,30 @@ function updateSidebarActivity() {
       badge.title = working + ' working';
     } else {
       badge.title = '';
+    }
+  }
+
+  config.projects.forEach(function (project) {
+    var projKey = project.path;
+    var item = projectListEl.querySelector(
+      '.project-item[data-project-path="' + CSS.escape(projKey) + '"]');
+    if (item) {
+      var primaryK = stateKey(projKey, null);
+      applyBadge(item.querySelector('.project-badge'),
+        attentionByKey[primaryK] || 0,
+        workingByKey[primaryK] || 0);
+    }
+    if (Array.isArray(project.workspaces)) {
+      project.workspaces.forEach(function (ws) {
+        if (!ws) return;
+        var wsItem = projectListEl.querySelector(
+          '.workspace-item[data-workspace-id="' + CSS.escape(ws.id) + '"]');
+        if (!wsItem) return;
+        var wsK = stateKey(projKey, ws.id);
+        applyBadge(wsItem.querySelector('.workspace-badge'),
+          attentionByKey[wsK] || 0,
+          workingByKey[wsK] || 0);
+      });
     }
   });
 }
@@ -741,24 +757,35 @@ function notifyAttentionNeeded(columnId) {
     }
   }
 
-  // Track project attention (persists across renderProjectList rebuilds)
+  // Track attention by (projectKey, workspaceId). Flash the project card when
+  // the column is Primary, the workspace sub-row when it's a sub-workspace —
+  // no cross-workspace rollup.
   if (notifSettings.sidebar) {
-    projectsNeedingAttention.add(col.projectKey);
-    // Apply to current DOM
-    var item = projectListEl.querySelector('.project-item[data-project-path="' + CSS.escape(col.projectKey) + '"]');
+    var attnKey = stateKey(col.projectKey, col.workspaceId);
+    projectsNeedingAttention.add(attnKey);
+    var sel;
+    if (col.workspaceId == null) {
+      sel = '.project-item[data-project-path="' + CSS.escape(col.projectKey) + '"]';
+    } else {
+      sel = '.workspace-item[data-workspace-id="' + CSS.escape(col.workspaceId) + '"]';
+    }
+    var item = projectListEl.querySelector(sel);
     if (item) item.classList.add('attention-flash');
   }
 }
 
-function clearProjectAttention(projectKey) {
+function clearProjectAttention(projectKey, workspaceId) {
   var changed = false;
   allColumns.forEach(function (col, id) {
-    if (col.projectKey === projectKey && col.activityState === 'attention') {
+    if (col.projectKey === projectKey
+        && (col.workspaceId == null ? null : col.workspaceId) === workspaceId
+        && col.activityState === 'attention') {
       col.activityState = 'idle';
       updateActivityIndicator(id);
       changed = true;
     }
   });
+  projectsNeedingAttention.delete(stateKey(projectKey, workspaceId));
   if (changed) updateSidebarActivity();
 }
 
@@ -1272,6 +1299,60 @@ function addWorkspace(projectIndex) {
   }
 }
 
+// Delete a sub-workspace from a project. Order matters — we splice from
+// project.workspaces FIRST so persistSessions' deletion guard short-circuits
+// any in-flight column-level writes that might race, then tear down the
+// columns (which kills PTYs), then scrub the disk blob, then switch active
+// back to Primary if needed.
+function deleteWorkspace(projectIndex, workspaceId) {
+  var project = config.projects[projectIndex];
+  if (!project) return;
+  if (!Array.isArray(project.workspaces)) return;
+  var wsIdx = -1;
+  for (var i = 0; i < project.workspaces.length; i++) {
+    if (project.workspaces[i] && project.workspaces[i].id === workspaceId) {
+      wsIdx = i; break;
+    }
+  }
+  if (wsIdx === -1) return;
+
+  var wasActive = project.activeWorkspaceId === workspaceId;
+  project.workspaces.splice(wsIdx, 1); // (1) guard trips for any late persist
+
+  // (2) Collect column ids for this workspace and remove each. removeColumn
+  //     calls persistSessions, whose guard now no-ops thanks to step (1).
+  var state = projectStates.get(stateKey(project.path, workspaceId));
+  var colIds = state ? Array.from(state.columns.keys()) : [];
+  colIds.forEach(function (id) { removeColumn(id); });
+
+  // (3) Drop the workspace's state bucket entirely — its containerEl/rows are
+  //     now gone anyway, but the Map entry would otherwise leak.
+  if (state && state.containerEl) state.containerEl.remove();
+  projectStates.delete(stateKey(project.path, workspaceId));
+
+  // (4) Scrub the disk blob.
+  if (window.electronAPI) {
+    window.electronAPI.loadSessions(project.path).then(function (blob) {
+      if (!blob || typeof blob !== 'object') return;
+      if (blob.workspaces && blob.workspaces[workspaceId]) {
+        delete blob.workspaces[workspaceId];
+        window.electronAPI.saveSessions(project.path, blob);
+      }
+    });
+  }
+
+  projectsNeedingAttention.delete(stateKey(project.path, workspaceId));
+
+  // (5) Route active back to Primary if we just deleted the active ws.
+  if (wasActive) {
+    setActiveWorkspace(projectIndex, null, false);
+  }
+
+  saveConfig();
+  renderProjectList();
+  updateSidebarActivity();
+}
+
 function buildWorkspaceItem(project, projectIndex, ws, wsIndex) {
   var wsItem = document.createElement('div');
   wsItem.className = 'workspace-item';
@@ -1279,6 +1360,9 @@ function buildWorkspaceItem(project, projectIndex, ws, wsIndex) {
   wsItem.dataset.workspaceId = ws.id;
   if (projectIndex === config.activeProjectIndex && project.activeWorkspaceId === ws.id) {
     wsItem.className += ' active';
+  }
+  if (projectsNeedingAttention.has(stateKey(project.path, ws.id))) {
+    wsItem.className += ' attention-flash';
   }
 
   var nameEl = document.createElement('div');
@@ -1315,9 +1399,12 @@ function buildWorkspaceItem(project, projectIndex, ws, wsIndex) {
   wsRemove.className = 'workspace-remove';
   wsRemove.textContent = '×';
   wsRemove.title = 'Delete workspace';
-  // Phase 4 wires the actual delete handler; Phase 3 leaves it as a no-op
-  // so the DOM is ready for the next phase's gate.
-  wsRemove.addEventListener('click', function (e) { e.stopPropagation(); });
+  wsRemove.addEventListener('click', function (e) {
+    e.stopPropagation();
+    if (confirm('Delete workspace "' + ws.name + '"? This will kill its terminals.')) {
+      deleteWorkspace(projectIndex, ws.id);
+    }
+  });
   right.appendChild(wsRemove);
 
   wsItem.appendChild(nameEl);
@@ -1352,7 +1439,7 @@ function buildProjectItem(project, index) {
       && project.activeWorkspaceId == null) {
     item.className += ' active';
   }
-  if (projectsNeedingAttention.has(key)) item.className += ' attention-flash';
+  if (projectsNeedingAttention.has(stateKey(key, null))) item.className += ' attention-flash';
   if (project.pinned) item.className += ' is-pinned';
   if (project.poppedOut) {
     item.className += ' popped-out';
@@ -3277,7 +3364,7 @@ function restartColumn(id) {
 function setFocusedColumn(id) {
   var col = allColumns.get(id);
   if (!col) return;
-  var state = projectStates.get(col.projectKey);
+  var state = projectStates.get(stateKey(col.projectKey, col.workspaceId));
   if (!state) return;
 
   if (state.focusedColumnId !== null && state.focusedColumnId !== id) {
@@ -3291,17 +3378,29 @@ function setFocusedColumn(id) {
   // Clear attention flash on this column's header
   if (col.headerEl) col.headerEl.classList.remove('attention-flash');
 
-  // Only clear sidebar flash if no other columns in this project are still flashing
+  // Only clear the sidebar flash if no other columns in the SAME (project,
+  // workspace) bucket are still flashing — cross-workspace rollup is not
+  // allowed per the "strictly per-workspace" alerts rule.
   var otherFlashing = false;
   allColumns.forEach(function (c, cid) {
-    if (cid !== id && c.projectKey === col.projectKey && c.headerEl &&
-        c.headerEl.classList.contains('attention-flash')) {
+    if (cid !== id
+        && c.projectKey === col.projectKey
+        && (c.workspaceId == null ? null : c.workspaceId) === (col.workspaceId == null ? null : col.workspaceId)
+        && c.headerEl
+        && c.headerEl.classList.contains('attention-flash')) {
       otherFlashing = true;
     }
   });
   if (!otherFlashing) {
-    projectsNeedingAttention.delete(col.projectKey);
-    var item = projectListEl.querySelector('.project-item[data-project-path="' + CSS.escape(col.projectKey) + '"]');
+    var attnKey = stateKey(col.projectKey, col.workspaceId);
+    projectsNeedingAttention.delete(attnKey);
+    var sel;
+    if (col.workspaceId == null) {
+      sel = '.project-item[data-project-path="' + CSS.escape(col.projectKey) + '"]';
+    } else {
+      sel = '.workspace-item[data-workspace-id="' + CSS.escape(col.workspaceId) + '"]';
+    }
+    var item = projectListEl.querySelector(sel);
     if (item) item.classList.remove('attention-flash');
   }
 }

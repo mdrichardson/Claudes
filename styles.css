@@ -1067,7 +1067,8 @@ html, body {
 
 /* Sidebar badge activity states */
 
-.project-badge.badge-working .claude-icon {
+.project-badge.badge-working .claude-icon,
+.workspace-badge.badge-working .claude-icon {
   filter: drop-shadow(0 0 3px var(--color-green));
   animation: spin-working 2s linear infinite;
 }
@@ -1087,7 +1088,8 @@ html, body {
   50% { background-color: rgba(245, 166, 35, 0.2); }
 }
 
-.project-badge.badge-attention .claude-icon {
+.project-badge.badge-attention .claude-icon,
+.workspace-badge.badge-attention .claude-icon {
   animation: pulse-icon-attention 1.2s ease-in-out infinite;
 }
 
