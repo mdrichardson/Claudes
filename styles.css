@@ -5107,13 +5107,13 @@ body.mode-popout #btn-add-project {
 
 .automations-flyout-action {
   background: transparent;
-  color: #ccc;
+  color: var(--text-body);
   border: none;
   padding: 4px 8px;
   cursor: pointer;
   font-size: 14px;
 }
-.automations-flyout-action:hover { color: #fff; }
+.automations-flyout-action:hover { color: var(--text-bright); }
 .automations-runwindow-indicator {
   position: absolute;
   top: 2px;
@@ -5121,23 +5121,21 @@ body.mode-popout #btn-add-project {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #4caf50;
+  background: var(--color-green);
   pointer-events: none;
 }
 .automations-runwindow-indicator.hidden { display: none; }
 .runwindow-popover {
-  position: absolute;
-  top: 100%;
-  right: 0;
+  position: fixed;
   margin-top: 4px;
-  background: #1e1e2f;
-  border: 1px solid #333;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-primary);
   border-radius: 4px;
   padding: 12px;
   min-width: 260px;
   z-index: 1000;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-  color: #eee;
+  box-shadow: 0 4px 12px var(--shadow-heavy);
+  color: var(--text-primary);
   font-size: 12px;
 }
 .runwindow-popover.hidden { display: none; }
@@ -5153,9 +5151,9 @@ body.mode-popout #btn-add-project {
   margin-bottom: 6px;
 }
 .runwindow-row input[type="time"] {
-  background: #111;
-  color: #eee;
-  border: 1px solid #333;
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  border: 1px solid var(--border-dim);
   padding: 2px 4px;
 }
 .runwindow-days {
@@ -5169,7 +5167,8 @@ body.mode-popout #btn-add-project {
   align-items: center;
   gap: 2px;
   padding: 2px 4px;
-  background: #222;
+  background: var(--bg-button);
+  color: var(--text-primary);
   border-radius: 3px;
   cursor: pointer;
 }
@@ -5180,7 +5179,7 @@ body.mode-popout #btn-add-project {
   margin-top: 10px;
 }
 .runwindow-error {
-  color: #f66;
+  color: var(--accent);
   font-size: 11px;
   margin-top: 4px;
 }
@@ -5191,36 +5190,36 @@ body.mode-popout #btn-add-project {
   gap: 6px;
   padding: 4px 10px;
   font-size: 11px;
-  background: #16161f;
-  color: #aaa;
-  border-bottom: 1px solid #222;
+  background: var(--bg-deep);
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-subtle);
   cursor: pointer;
   user-select: none;
 }
 .automations-runwindow-strip.hidden { display: none; }
-.automations-runwindow-strip:hover { background: #1c1c28; color: #ddd; }
+.automations-runwindow-strip:hover { background: var(--hover-medium); color: var(--text-primary); }
 .automations-runwindow-strip-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #666;
+  background: var(--text-dim);
   flex: 0 0 auto;
 }
-.automations-runwindow-strip.active .automations-runwindow-strip-dot { background: #4caf50; }
-.automations-runwindow-strip.paused .automations-runwindow-strip-dot { background: #ff9800; }
+.automations-runwindow-strip.active .automations-runwindow-strip-dot { background: var(--color-green); }
+.automations-runwindow-strip.paused .automations-runwindow-strip-dot { background: var(--color-yellow); }
 
 /* === Run Window Modal Section === */
 .automation-runwindow-section {
-  border: 1px solid #2a2a3a;
+  border: 1px solid var(--border-subtle);
   border-radius: 4px;
   padding: 8px;
   margin-bottom: 12px;
-  background: #141421;
+  background: var(--bg-deep);
 }
 .automation-runwindow-toggle {
   background: transparent;
   border: none;
-  color: #ddd;
+  color: var(--text-primary);
   cursor: pointer;
   font-size: 12px;
   padding: 0;
@@ -5238,13 +5237,16 @@ body.mode-popout #btn-add-project {
 .automation-runwindow-body { margin-top: 8px; }
 .automation-runwindow-times { display: flex; gap: 12px; }
 .automation-runwindow-times input[type="time"] {
-  background: #111; color: #eee; border: 1px solid #333; padding: 2px 4px;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  border: 1px solid var(--border-dim);
+  padding: 2px 4px;
 }
 
 .automation-runwindow-badge {
   display: inline-block;
   margin-left: 4px;
-  color: #8a8;
+  color: var(--color-green);
   font-size: 10px;
   cursor: help;
 }

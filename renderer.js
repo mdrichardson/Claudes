@@ -8572,8 +8572,23 @@ function refreshAutomationsFlyout() {
 
 var currentRunWindowDraft = null;
 
-function openRunWindowPopover() {
+var runWindowPopoverAnchor = null;
+
+function positionRunWindowPopover() {
   var pop = document.getElementById('automations-runwindow-popover');
+  if (!pop || !runWindowPopoverAnchor) return;
+  var rect = runWindowPopoverAnchor.getBoundingClientRect();
+  var popWidth = pop.offsetWidth || 260;
+  var left = Math.min(Math.max(rect.left, 8), window.innerWidth - popWidth - 8);
+  var top = rect.bottom + 4;
+  pop.style.left = left + 'px';
+  pop.style.top = top + 'px';
+  pop.style.right = 'auto';
+}
+
+function openRunWindowPopover(anchor) {
+  var pop = document.getElementById('automations-runwindow-popover');
+  if (anchor) runWindowPopoverAnchor = anchor;
   window.electronAPI.getAutomationSettings().then(function (settings) {
     var w = settings.runWindow || { enabled: false, startHour: 9, startMinute: 0, endHour: 17, endMinute: 0, days: ['mon','tue','wed','thu','fri'] };
     document.getElementById('runwindow-enabled').checked = !!w.enabled;
@@ -8588,6 +8603,7 @@ function openRunWindowPopover() {
     });
     document.getElementById('runwindow-error').style.display = 'none';
     pop.classList.remove('hidden');
+    positionRunWindowPopover();
   });
 }
 
@@ -8733,12 +8749,21 @@ document.getElementById('btn-automations-global-toggle').addEventListener('click
       document.getElementById('runwindow-fields').style.display = this.checked ? 'block' : 'none';
     });
   }
+  function togglePopoverFrom(anchor) {
+    var pop = document.getElementById('automations-runwindow-popover');
+    if (pop.classList.contains('hidden')) openRunWindowPopover(anchor);
+    else closeRunWindowPopover();
+  }
+
   var openBtn = document.getElementById('btn-automations-runwindow');
   if (openBtn) openBtn.addEventListener('click', function (e) {
     e.stopPropagation();
-    var pop = document.getElementById('automations-runwindow-popover');
-    if (pop.classList.contains('hidden')) openRunWindowPopover();
-    else closeRunWindowPopover();
+    togglePopoverFrom(openBtn);
+  });
+  var panelBtn = document.getElementById('btn-automations-runwindow-panel');
+  if (panelBtn) panelBtn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    togglePopoverFrom(panelBtn);
   });
   var cancelBtn = document.getElementById('btn-runwindow-cancel');
   if (cancelBtn) cancelBtn.addEventListener('click', closeRunWindowPopover);
@@ -8747,19 +8772,21 @@ document.getElementById('btn-automations-global-toggle').addEventListener('click
 
   document.addEventListener('click', function (e) {
     var pop = document.getElementById('automations-runwindow-popover');
-    var wrap = document.querySelector('.automations-runwindow-wrap');
     if (!pop || pop.classList.contains('hidden')) return;
-    if (wrap && !wrap.contains(e.target)) closeRunWindowPopover();
+    if (pop.contains(e.target)) return;
+    if (openBtn && openBtn.contains(e.target)) return;
+    if (panelBtn && panelBtn.contains(e.target)) return;
+    closeRunWindowPopover();
+  });
+
+  window.addEventListener('resize', function () {
+    var pop = document.getElementById('automations-runwindow-popover');
+    if (pop && !pop.classList.contains('hidden')) positionRunWindowPopover();
   });
 
   var strip = document.getElementById('automations-runwindow-strip');
   if (strip) strip.addEventListener('click', function () {
-    var flyout = document.getElementById('automations-flyout');
-    if (flyout && flyout.classList.contains('hidden')) {
-      var btn = document.getElementById('btn-automations-flyout');
-      if (btn) btn.click();
-    }
-    openRunWindowPopover();
+    openRunWindowPopover(strip);
   });
 
   startAutomationsStatusStripTimer();
