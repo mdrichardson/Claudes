@@ -8560,6 +8560,89 @@ function saveRunWindowPopover() {
   });
 }
 
+var runWindowStripTimer = null;
+
+function formatRunWindowSummary(w) {
+  var pad = function (n) { return String(n).padStart(2, '0'); };
+  var dayLabels = { mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun' };
+  var order = ['mon','tue','wed','thu','fri','sat','sun'];
+  var sel = order.filter(function (d) { return w.days.indexOf(d) !== -1; }).map(function (d) { return dayLabels[d]; });
+  var dayStr;
+  if (sel.length === 5 && w.days.indexOf('mon') !== -1 && w.days.indexOf('fri') !== -1 && w.days.indexOf('sat') === -1 && w.days.indexOf('sun') === -1) dayStr = 'Mon–Fri';
+  else if (sel.length === 7) dayStr = 'Every day';
+  else dayStr = sel.join(', ');
+  return pad(w.startHour) + ':' + pad(w.startMinute || 0) + '–' + pad(w.endHour) + ':' + pad(w.endMinute || 0) + ' · ' + dayStr;
+}
+
+// Renderer-side copy of isWithinRunWindow (keep behavior identical to main.js)
+function isWithinRunWindow(w, now) {
+  if (!w || !w.enabled) return true;
+  if (!w.days || w.days.length === 0) return false;
+  var names = ['sun','mon','tue','wed','thu','fri','sat'];
+  var today = names[now.getDay()];
+  var yest = names[(now.getDay() + 6) % 7];
+  var nm = now.getHours() * 60 + now.getMinutes();
+  var sm = w.startHour * 60 + (w.startMinute || 0);
+  var em = w.endHour * 60 + (w.endMinute || 0);
+  if (em > sm) return w.days.indexOf(today) !== -1 && nm >= sm && nm < em;
+  if (w.days.indexOf(today) !== -1 && nm >= sm) return true;
+  if (w.days.indexOf(yest) !== -1 && nm < em) return true;
+  return false;
+}
+
+function nextOpenMoment(w, from) {
+  var names = ['sun','mon','tue','wed','thu','fri','sat'];
+  var dayLabel = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  var pad = function (n) { return String(n).padStart(2, '0'); };
+  for (var i = 0; i < 8; i++) {
+    var d = new Date(from.getTime() + i * 86400000);
+    var key = names[d.getDay()];
+    if (w.days.indexOf(key) === -1) continue;
+    var scheduled = new Date(d.getFullYear(), d.getMonth(), d.getDate(), w.startHour, w.startMinute || 0, 0, 0);
+    if (scheduled > from) return dayLabel[d.getDay()] + ' ' + pad(w.startHour) + ':' + pad(w.startMinute || 0);
+  }
+  return '';
+}
+
+function refreshAutomationsStatusStrip() {
+  var strip = document.getElementById('automations-runwindow-strip');
+  if (!strip) return;
+  window.electronAPI.getAutomationSettings().then(function (settings) {
+    var w = settings.runWindow;
+    if (!w || !w.enabled) {
+      strip.classList.add('hidden');
+      strip.classList.remove('active', 'paused');
+      return;
+    }
+    strip.classList.remove('hidden');
+    var now = new Date();
+    var open = isWithinRunWindow(w, now);
+    var summary = formatRunWindowSummary(w);
+    var textEl = document.getElementById('automations-runwindow-strip-text');
+    if (open) {
+      strip.classList.add('active'); strip.classList.remove('paused');
+      textEl.textContent = '⏰ Active · ' + summary;
+    } else {
+      strip.classList.add('paused'); strip.classList.remove('active');
+      var next = nextOpenMoment(w, now);
+      textEl.textContent = '⏰ Paused until ' + next + ' · ' + summary;
+    }
+  });
+}
+
+function startAutomationsStatusStripTimer() {
+  if (runWindowStripTimer) return;
+  refreshAutomationsStatusStrip();
+  runWindowStripTimer = setInterval(refreshAutomationsStatusStrip, 60000);
+}
+
+function stopAutomationsStatusStripTimer() {
+  if (runWindowStripTimer) {
+    clearInterval(runWindowStripTimer);
+    runWindowStripTimer = null;
+  }
+}
+
 function refreshAutomationsRunWindowIndicator() {
   var ind = document.getElementById('automations-runwindow-indicator');
   if (!ind) return;
@@ -8602,6 +8685,18 @@ document.getElementById('btn-automations-global-toggle').addEventListener('click
     if (!pop || pop.classList.contains('hidden')) return;
     if (wrap && !wrap.contains(e.target)) closeRunWindowPopover();
   });
+
+  var strip = document.getElementById('automations-runwindow-strip');
+  if (strip) strip.addEventListener('click', function () {
+    var flyout = document.getElementById('automations-flyout');
+    if (flyout && flyout.classList.contains('hidden')) {
+      var btn = document.getElementById('btn-automations-flyout');
+      if (btn) btn.click();
+    }
+    openRunWindowPopover();
+  });
+
+  startAutomationsStatusStripTimer();
 
   refreshAutomationsRunWindowIndicator();
 })();

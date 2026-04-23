@@ -5184,3 +5184,27 @@ body.mode-popout #btn-add-project {
   font-size: 11px;
   margin-top: 4px;
 }
+
+.automations-runwindow-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  background: #16161f;
+  color: #aaa;
+  border-bottom: 1px solid #222;
+  cursor: pointer;
+  user-select: none;
+}
+.automations-runwindow-strip.hidden { display: none; }
+.automations-runwindow-strip:hover { background: #1c1c28; color: #ddd; }
+.automations-runwindow-strip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #666;
+  flex: 0 0 auto;
+}
+.automations-runwindow-strip.active .automations-runwindow-strip-dot { background: #4caf50; }
+.automations-runwindow-strip.paused .automations-runwindow-strip-dot { background: #ff9800; }
