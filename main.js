@@ -3351,9 +3351,12 @@ function startAutomationScheduler() {
   setTimeout(() => {
     const startupData = readAutomations();
     if (!startupData.globalEnabled) return;
-    const todayStr = new Date().toDateString();
+    const now = new Date();
+    if (!isWithinRunWindow(startupData.runWindow, now)) return;
+    const todayStr = now.toDateString();
     startupData.automations.forEach(automation => {
       if (!automation.enabled) return;
+      if (!isWithinRunWindow(automation.runWindow, now)) return;
       automation.agents.forEach(agent => {
         if (!agent.enabled) return;
         if (agent.runMode === 'run_after') return;
