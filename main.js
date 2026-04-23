@@ -2229,7 +2229,8 @@ ipcMain.handle('automations:validateDependencies', (event, agents) => {
 ipcMain.handle('automations:getSettings', () => {
   const data = readAutomations();
   return {
-    agentReposBaseDir: data.agentReposBaseDir || path.join(os.homedir(), '.claudes', 'agents')
+    agentReposBaseDir: data.agentReposBaseDir || path.join(os.homedir(), '.claudes', 'agents'),
+    runWindow: data.runWindow || null
   };
 });
 
@@ -2237,6 +2238,10 @@ ipcMain.handle('automations:updateSettings', (event, settings) => {
   const data = readAutomations();
   if (settings.agentReposBaseDir !== undefined) {
     data.agentReposBaseDir = settings.agentReposBaseDir;
+  }
+  if (settings.runWindow !== undefined) {
+    // null clears the window; object replaces it
+    data.runWindow = settings.runWindow;
   }
   writeAutomations(data);
   return true;
