@@ -227,6 +227,33 @@
           <div class="automations-runwindow-wrap" style="position:relative;display:inline-block;">
             <button id="btn-automations-runwindow" class="automations-flyout-action" title="Run window">&#128344;</button>
             <span id="automations-runwindow-indicator" class="automations-runwindow-indicator hidden"></span>
+            <div id="automations-runwindow-popover" class="runwindow-popover hidden">
+              <div class="runwindow-popover-title">Run window</div>
+              <label class="runwindow-row">
+                <input type="checkbox" id="runwindow-enabled">
+                <span>Restrict when automations can run</span>
+              </label>
+              <div id="runwindow-fields" style="display:none;">
+                <div class="runwindow-row">
+                  <label>From <input type="time" id="runwindow-start" value="09:00"></label>
+                  <label>To <input type="time" id="runwindow-end" value="17:00"></label>
+                </div>
+                <div class="runwindow-days">
+                  <label><input type="checkbox" data-day="mon" checked> M</label>
+                  <label><input type="checkbox" data-day="tue" checked> T</label>
+                  <label><input type="checkbox" data-day="wed" checked> W</label>
+                  <label><input type="checkbox" data-day="thu" checked> T</label>
+                  <label><input type="checkbox" data-day="fri" checked> F</label>
+                  <label><input type="checkbox" data-day="sat"> S</label>
+                  <label><input type="checkbox" data-day="sun"> S</label>
+                </div>
+                <div id="runwindow-error" class="runwindow-error" style="display:none;"></div>
+              </div>
+              <div class="runwindow-actions">
+                <button id="btn-runwindow-cancel" class="btn-secondary">Cancel</button>
+                <button id="btn-runwindow-save" class="btn-primary">Save</button>
+              </div>
+            </div>
           </div>
           <button id="btn-automations-flyout-close" class="automations-flyout-close" title="Close">&times;</button>
         </div>

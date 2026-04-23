@@ -5125,3 +5125,62 @@ body.mode-popout #btn-add-project {
   pointer-events: none;
 }
 .automations-runwindow-indicator.hidden { display: none; }
+.runwindow-popover {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  background: #1e1e2f;
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 12px;
+  min-width: 260px;
+  z-index: 1000;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  color: #eee;
+  font-size: 12px;
+}
+.runwindow-popover.hidden { display: none; }
+.runwindow-popover-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.runwindow-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.runwindow-row input[type="time"] {
+  background: #111;
+  color: #eee;
+  border: 1px solid #333;
+  padding: 2px 4px;
+}
+.runwindow-days {
+  display: flex;
+  gap: 4px;
+  margin: 8px 0;
+  flex-wrap: wrap;
+}
+.runwindow-days label {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
+  background: #222;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.runwindow-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+.runwindow-error {
+  color: #f66;
+  font-size: 11px;
+  margin-top: 4px;
+}
