@@ -5511,10 +5511,10 @@ body.mode-popout #btn-add-project {
   flex: 0 0 10px;
 }
 
-.sharing-status-disconnected .sharing-status-dot { background: #666; }
-.sharing-status-connecting   .sharing-status-dot { background: #e0a030; animation: sharing-pulse 1.2s infinite; }
-.sharing-status-connected    .sharing-status-dot { background: #3dbb60; }
-.sharing-status-error        .sharing-status-dot { background: #c24040; }
+#settings-sharing-group .sharing-status-disconnected .sharing-status-dot { background: #666; }
+#settings-sharing-group .sharing-status-connecting   .sharing-status-dot { background: #e0a030; animation: sharing-pulse 1.2s infinite; }
+#settings-sharing-group .sharing-status-connected    .sharing-status-dot { background: #3dbb60; }
+#settings-sharing-group .sharing-status-error        .sharing-status-dot { background: #c24040; }
 
 @keyframes sharing-pulse {
   0%, 100% { opacity: 1; }
