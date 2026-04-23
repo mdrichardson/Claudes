@@ -126,5 +126,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onHeadlessOutput: (callback) => ipcRenderer.on('headless:output', (_, data) => callback(data)),
   onHeadlessCompleted: (callback) => ipcRenderer.on('headless:completed', (_, data) => callback(data)),
   onHeadlessFocusRun: (callback) => ipcRenderer.on('headless:focus-run', (_, data) => callback(data)),
-  onPowerResume: (callback) => ipcRenderer.on('power:resume', () => callback())
+  onPowerResume: (callback) => ipcRenderer.on('power:resume', () => callback()),
+
+  // Sharing / collaborative automations
+  sharing: {
+    getConnectionStatus: () => ipcRenderer.invoke('sharing:getConnectionStatus'),
+    configureConnection: (cfg) => ipcRenderer.invoke('sharing:configureConnection', cfg),
+    clearConnection: () => ipcRenderer.invoke('sharing:clearConnection'),
+    onConnectionStateChanged: (cb) => {
+      const listener = (_evt, state) => cb(state);
+      ipcRenderer.on('sharing:connection-state-changed', listener);
+      return () => ipcRenderer.removeListener('sharing:connection-state-changed', listener);
+    },
+  },
 });
