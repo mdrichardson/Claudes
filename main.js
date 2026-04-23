@@ -28,6 +28,46 @@ const AUTOMATIONS_FILE = path.join(CONFIG_DIR, app.isPackaged ? 'automations.jso
 const AUTOMATIONS_RUNS_DIR = path.join(CONFIG_DIR, app.isPackaged ? 'automation-runs' : 'automation-runs-dev');
 const AGENTS_DIR_DEFAULT = path.join(CONFIG_DIR, app.isPackaged ? 'agents' : 'agents-dev');
 
+// --- Shared automations (collaborative mode) ---
+// Credential storage uses Electron safeStorage. Mongo client lifecycle lives
+// in lib/sharing-mongo.js. This section is intentionally scoped narrowly —
+// Phase 1 only handles connect/disconnect/status. Later phases add orgs,
+// automations, and sync.
+const { safeStorage } = require('electron');
+const { createCredStore } = require('./lib/sharing-credstore');
+const sharingMongo = require('./lib/sharing-mongo');
+const { normalizeConnectionString } = require('./lib/sharing-connection-string');
+
+const SHARED_CREDS_FILE = path.join(CONFIG_DIR, 'shared-creds.enc');
+const sharingCredStore = createCredStore({
+  safeStorage,
+  fs,
+  filePath: SHARED_CREDS_FILE,
+  log: (...args) => console.warn('[sharing]', ...args),
+});
+
+let sharingConnectionState = { state: 'disconnected' }; // 'disconnected' | 'connecting' | 'connected' | 'error'
+
+function broadcastSharingState() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('sharing:connection-state-changed', sharingConnectionState);
+  }
+}
+
+async function tryAutoConnectSharing() {
+  const stored = sharingCredStore.read();
+  if (!stored) return;
+  sharingConnectionState = { state: 'connecting' };
+  broadcastSharingState();
+  try {
+    const info = await sharingMongo.connect(stored);
+    sharingConnectionState = { state: 'connected', dbName: info.dbName, hostRedacted: info.hostRedacted };
+  } catch (err) {
+    sharingConnectionState = { state: 'error', error: String(err && err.message || err) };
+  }
+  broadcastSharingState();
+}
+
 // --- Config ---
 
 function ensureConfigDir() {
@@ -2412,6 +2452,61 @@ ipcMain.handle('headless:delete', (_event, projectPath, runId) => {
   return { deleted: deleteHeadless(projectPath, runId) };
 });
 
+// --- Sharing IPC handlers ---
+
+ipcMain.handle('sharing:getConnectionStatus', () => {
+  return sharingConnectionState;
+});
+
+ipcMain.handle('sharing:configureConnection', async (_evt, { connectionString, dbName }) => {
+  if (!sharingCredStore.isAvailable()) {
+    return { ok: false, error: "This machine can't securely store credentials. Sharing disabled." };
+  }
+  let cs;
+  try {
+    cs = normalizeConnectionString(connectionString);
+  } catch (err) {
+    return { ok: false, error: String(err.message || err) };
+  }
+  const dbNameTrimmed = typeof dbName === 'string' ? dbName.trim() : '';
+  if (!dbNameTrimmed) {
+    return { ok: false, error: 'Database name is required' };
+  }
+  sharingConnectionState = { state: 'connecting' };
+  broadcastSharingState();
+  const result = await sharingMongo.testConnection({ connectionString: cs, dbName: dbNameTrimmed });
+  if (!result.ok) {
+    sharingConnectionState = { state: 'error', error: result.error };
+    broadcastSharingState();
+    return { ok: false, error: result.error };
+  }
+  try {
+    sharingCredStore.write({ connectionString: cs, dbName: dbNameTrimmed });
+  } catch (err) {
+    sharingConnectionState = { state: 'error', error: String(err.message || err) };
+    broadcastSharingState();
+    return { ok: false, error: String(err.message || err) };
+  }
+  try {
+    const info = await sharingMongo.connect({ connectionString: cs, dbName: dbNameTrimmed });
+    sharingConnectionState = { state: 'connected', dbName: info.dbName, hostRedacted: info.hostRedacted };
+    broadcastSharingState();
+    return { ok: true, dbName: info.dbName, hostRedacted: info.hostRedacted };
+  } catch (err) {
+    sharingConnectionState = { state: 'error', error: String(err.message || err) };
+    broadcastSharingState();
+    return { ok: false, error: String(err.message || err) };
+  }
+});
+
+ipcMain.handle('sharing:clearConnection', async () => {
+  await sharingMongo.disconnect();
+  sharingCredStore.clear();
+  sharingConnectionState = { state: 'disconnected' };
+  broadcastSharingState();
+  return { ok: true };
+});
+
 // --- Automations Scheduler & Execution ---
 
 const agentLiveOutputBuffers = new Map(); // 'automationId:agentId' -> string[] chunks
@@ -3788,6 +3883,7 @@ if (!gotLock) {
     setupAutoUpdater();
     migrateLoopsToAutomations();
     startAutomationScheduler();
+    tryAutoConnectSharing();
 
     const cfg = readConfig();
     for (const p of cfg.projects) {
@@ -3837,6 +3933,7 @@ app.on('before-quit', () => {
   }
   flushPendingConfig();
   stopAutomationScheduler();
+  sharingMongo.disconnect().catch(() => { /* ignore */ });
   if (ptyServerProcess) {
     ptyServerProcess.kill();
   }
