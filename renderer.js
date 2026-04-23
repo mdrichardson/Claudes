@@ -766,6 +766,14 @@ function clearProjectAttention(projectKey) {
 // Per-project state helpers
 // ============================================================
 
+// Map key for projectStates. Primary context (workspaceId null/undefined)
+// keys on projectPath alone so existing single-project code keeps working.
+// Sub-workspace contexts append '::<workspaceId>' so each workspace owns its
+// own columns/rows/containerEl entry in projectStates.
+function stateKey(projectPath, workspaceId) {
+  return (workspaceId == null) ? projectPath : (projectPath + '::' + workspaceId);
+}
+
 function getOrCreateProjectState(projectKey) {
   if (projectStates.has(projectKey)) return projectStates.get(projectKey);
 
@@ -923,6 +931,12 @@ function loadProjects() {
       }
       if (config.projects[i].popoutBounds === undefined) {
         config.projects[i].popoutBounds = null;
+      }
+      if (!Array.isArray(config.projects[i].workspaces)) {
+        config.projects[i].workspaces = [];
+      }
+      if (config.projects[i].activeWorkspaceId === undefined) {
+        config.projects[i].activeWorkspaceId = null;
       }
     }
     if (config.fontSize) {
@@ -1121,13 +1135,14 @@ function applyTransferredColumns(projIdx, transfer) {
       cmd: entry.cmd,
       env: entry.env,
       cwd: entry.cwd,
-      isDiff: entry.isDiff
+      isDiff: entry.isDiff,
+      workspaceId: null // popouts are Primary-only
     });
   });
 
   activeProjectKey = prevActive;
   setActiveProject(projIdx, false);
-  persistSessions(project.path);
+  persistSessions(project.path, null);
 }
 
 function disposeColumnLocalOnly(id) {
@@ -1661,7 +1676,11 @@ function setActiveProject(index, isStartup) {
 }
 
 function restoreProjectSessions(projectPath, project) {
-  window.electronAPI.loadSessions(projectPath).then(function (savedSessions) {
+  // Primary-only restore for Phase 2. Phase 3 adds workspace restoration via
+  // restoreSessions(projectPath, workspaceId).
+  window.electronAPI.loadSessions(projectPath).then(function (blob) {
+    var savedSessions = (blob && Array.isArray(blob.sessions)) ? blob.sessions
+                      : (Array.isArray(blob) ? blob : []); // legacy array shape tolerance
     var spawnArgs = buildSpawnArgs();
     if (savedSessions && savedSessions.length > 0) {
       for (var i = 0; i < savedSessions.length; i++) {
@@ -1669,10 +1688,12 @@ function restoreProjectSessions(projectPath, project) {
         var entry = savedSessions[i];
         var sessionId = typeof entry === 'string' ? entry : entry.sessionId;
         var title = typeof entry === 'object' ? entry.title : null;
-        addColumn(spawnArgs.concat(['--resume', sessionId]), null, title ? { title: title } : {});
+        var opts = { workspaceId: null };
+        if (title) opts.title = title;
+        addColumn(spawnArgs.concat(['--resume', sessionId]), null, opts);
       }
     } else {
-      addColumn(spawnArgs.length > 0 ? spawnArgs : null);
+      addColumn(spawnArgs.length > 0 ? spawnArgs : null, null, { workspaceId: null });
     }
   });
 }
@@ -2011,7 +2032,7 @@ function startTitleEdit(id, titleEl) {
       var col = allColumns.get(id);
       if (!col) return;
       col.customTitle = text;
-      persistSessions(col.projectKey);
+      persistSessions(col.projectKey, col.workspaceId);
     },
     onEmpty: function () { return 'Claude #' + id; }
   });
@@ -2268,6 +2289,9 @@ function addColumn(args, targetRow, opts) {
     headerEl: header,
     cwd: cwd,
     projectKey: activeProjectKey,
+    // Primary columns stamp workspaceId=null. Sub-workspace support lands in
+    // Phase 3, which will override via opts.workspaceId at spawn time.
+    workspaceId: (opts.workspaceId !== undefined) ? opts.workspaceId : null,
     sessionId: resumeSessionId,
     sessionMtime: 0,
     customTitle: opts.title || null,
@@ -2799,7 +2823,7 @@ function fetchAndSetSessionTitle(columnId, projectPath, sessionId) {
     col2.customTitle = title;
     var titleEl = col2.headerEl.querySelector('.col-title');
     if (titleEl) titleEl.textContent = title;
-    persistSessions(col2.projectKey);
+    persistSessions(col2.projectKey, col2.workspaceId);
   });
 }
 
@@ -2827,7 +2851,7 @@ function detectSession(columnId, projectPath, preExistingIds, attempt) {
           if (col) {
             col.sessionId = sid;
             col.sessionMtime = sessions[i].modified || 0;
-            persistSessions(col.projectKey);
+            persistSessions(col.projectKey, col.workspaceId);
             fetchAndSetSessionTitle(columnId, projectPath, sid);
           }
           return;
@@ -2877,7 +2901,7 @@ function startSessionSync(columnId, projectPath) {
             if (!claimed[s.sessionId] && s.modified > (col2.sessionMtime || 0)) {
               col2.sessionId = s.sessionId;
               col2.sessionMtime = s.modified;
-              persistSessions(col2.projectKey);
+              persistSessions(col2.projectKey, col2.workspaceId);
               fetchAndSetSessionTitle(columnId, projectPath, s.sessionId);
               return;
             }
@@ -2892,7 +2916,7 @@ function startSessionSync(columnId, projectPath) {
           if (!claimed[sid]) {
             col2.sessionId = sid;
             col2.sessionMtime = sessions[k].modified;
-            persistSessions(col2.projectKey);
+            persistSessions(col2.projectKey, col2.workspaceId);
             fetchAndSetSessionTitle(columnId, projectPath, sid);
             return;
           }
@@ -2912,17 +2936,42 @@ function stopSessionSync(columnId) {
   }
 }
 
-function persistSessions(projectKey) {
+// Persist the current column layout for (projectKey, workspaceId) into the
+// single sessions.json blob. Primary (workspaceId null) writes to blob.sessions;
+// sub-workspaces write to blob.workspaces[workspaceId].sessions.
+//
+// Guard: if workspaceId refers to a workspace that's mid-delete (no longer in
+// project.workspaces), skip the write so the delete path's in-memory mutation
+// isn't overwritten by a late column-level persist.
+function persistSessions(projectKey, workspaceId) {
   if (!window.electronAPI) return;
-  var state = projectStates.get(projectKey);
-  if (!state) return;
-  var sessionData = [];
-  state.columns.forEach(function (col) {
-    if (col.sessionId) {
-      sessionData.push({ sessionId: col.sessionId, title: col.customTitle || null });
+  if (workspaceId != null) {
+    var project = config.projects.find(function (p) { return p && p.path === projectKey; });
+    if (!project || !Array.isArray(project.workspaces) ||
+        !project.workspaces.some(function (w) { return w && w.id === workspaceId; })) {
+      return; // deletion in progress — bail
     }
+  }
+  var state = projectStates.get(stateKey(projectKey, workspaceId));
+  var sessionData = [];
+  if (state) {
+    state.columns.forEach(function (col) {
+      if (col.sessionId) {
+        sessionData.push({ sessionId: col.sessionId, title: col.customTitle || null });
+      }
+    });
+  }
+  window.electronAPI.loadSessions(projectKey).then(function (blob) {
+    if (!blob || typeof blob !== 'object') blob = { sessions: [], workspaces: {} };
+    if (!Array.isArray(blob.sessions)) blob.sessions = [];
+    if (!blob.workspaces || typeof blob.workspaces !== 'object') blob.workspaces = {};
+    if (workspaceId == null) {
+      blob.sessions = sessionData;
+    } else {
+      blob.workspaces[workspaceId] = { sessions: sessionData };
+    }
+    window.electronAPI.saveSessions(projectKey, blob);
   });
-  window.electronAPI.saveSessions(projectKey, sessionData);
 }
 
 function removeColumn(id) {
@@ -2991,7 +3040,7 @@ function removeColumn(id) {
 
   refitAll();
   saveColumnCounts();
-  persistSessions(col.projectKey);
+  persistSessions(col.projectKey, col.workspaceId);
   updateProjectBadges();
   updateSidebarActivity();
 }
