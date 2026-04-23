@@ -1581,7 +1581,7 @@ ipcMain.handle('automations:update', (event, automationId, updates) => {
   const data = readAutomations();
   const automation = data.automations.find(a => a.id === automationId);
   if (!automation) return null;
-  const safeFields = ['name', 'enabled', 'manager'];
+  const safeFields = ['name', 'enabled', 'manager', 'runWindow'];
   safeFields.forEach(field => {
     if (updates[field] !== undefined) automation[field] = updates[field];
   });
