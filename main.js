@@ -2381,6 +2381,37 @@ ipcMain.handle('automations:setupManagerClone', async (event, automationId) => {
   });
 });
 
+ipcMain.handle('headless:run', (_event, projectPath, prompt) => {
+  try {
+    const { runId, entry } = runHeadless(projectPath, prompt);
+    return { runId, entry };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('headless:list', (_event, projectPath) => {
+  if (!projectPath) return { runs: [] };
+  return readHeadlessIndex(projectPath);
+});
+
+ipcMain.handle('headless:get', (_event, projectPath, runId) => {
+  const index = readHeadlessIndex(projectPath);
+  const entry = index.runs.find(r => r.runId === runId);
+  if (!entry) return { error: 'Not found' };
+  let output = '';
+  try { output = fs.readFileSync(headlessOutputPath(projectPath, runId), 'utf8'); } catch { /* absent */ }
+  return { entry, output };
+});
+
+ipcMain.handle('headless:cancel', (_event, runId) => {
+  return { cancelled: cancelHeadless(runId) };
+});
+
+ipcMain.handle('headless:delete', (_event, projectPath, runId) => {
+  return { deleted: deleteHeadless(projectPath, runId) };
+});
+
 // --- Automations Scheduler & Execution ---
 
 const agentLiveOutputBuffers = new Map(); // 'automationId:agentId' -> string[] chunks
@@ -2790,6 +2821,135 @@ function spawnHeadlessClaude(prompt, cwd, opts) {
   };
 
   return { child, cleanup };
+}
+
+// --- Headless Runner ---
+
+const runningHeadless = new Map(); // runId -> { child, cleanup, projectPath, cancelled? }
+
+function runHeadless(projectPath, prompt) {
+  if (!projectPath || typeof prompt !== 'string') {
+    throw new Error('runHeadless requires projectPath and prompt');
+  }
+  if (!fs.existsSync(projectPath)) {
+    throw new Error('Working directory not found: ' + projectPath);
+  }
+
+  const cfg = readConfig();
+  const project = (cfg.projects || []).find(p => p && p.path === projectPath);
+  const spawnOptions = (project && project.spawnOptions) || {};
+
+  const runId = require('crypto').randomUUID();
+  const startedAt = new Date().toISOString();
+  const title = deriveHeadlessTitle(prompt);
+
+  ensureHeadlessDirs(projectPath);
+  const outputFile = headlessOutputPath(projectPath, runId);
+  fs.writeFileSync(outputFile, '', 'utf8');
+
+  // Prepend the new run, then evict oldest beyond cap.
+  let index = readHeadlessIndex(projectPath);
+  const entry = {
+    runId,
+    title,
+    prompt,
+    status: 'running',
+    startedAt,
+    completedAt: null,
+    durationMs: 0,
+    exitCode: null
+  };
+  index = { ...index, runs: [entry, ...(index.runs || [])] };
+  index = applyHeadlessEviction(projectPath, index);
+  writeHeadlessIndex(projectPath, index);
+
+  if (mainWindow) {
+    mainWindow.webContents.send('headless:started', { projectPath, runId, entry });
+  }
+
+  let outputStream;
+  try {
+    outputStream = fs.createWriteStream(outputFile, { flags: 'a' });
+  } catch (err) {
+    finalizeHeadlessRun(projectPath, runId, 'error', null, 'Failed to open output file: ' + err.message);
+    throw err;
+  }
+
+  const spawned = spawnHeadlessClaude(prompt, projectPath, {
+    skipPermissions: !!spawnOptions.skipPermissions,
+    bare: !!spawnOptions.bare,
+    model: spawnOptions.model || null,
+    onText: (text) => {
+      try { outputStream.write(text); } catch { /* ignore */ }
+      if (mainWindow) mainWindow.webContents.send('headless:output', { projectPath, runId, chunk: text });
+    }
+  });
+
+  runningHeadless.set(runId, { child: spawned.child, cleanup: spawned.cleanup, projectPath });
+
+  spawned.child.on('close', (exitCode) => {
+    const state = runningHeadless.get(runId);
+    const cancelled = state && state.cancelled;
+    runningHeadless.delete(runId);
+    spawned.cleanup();
+    try { outputStream.end(); } catch { /* ignore */ }
+    const status = cancelled ? 'cancelled' : (exitCode === 0 ? 'completed' : 'error');
+    finalizeHeadlessRun(projectPath, runId, status, exitCode, null);
+  });
+
+  spawned.child.on('error', (err) => {
+    runningHeadless.delete(runId);
+    spawned.cleanup();
+    try { outputStream.end(); } catch { /* ignore */ }
+    finalizeHeadlessRun(projectPath, runId, 'error', null, err.message);
+  });
+
+  return { runId, entry };
+}
+
+function finalizeHeadlessRun(projectPath, runId, status, exitCode, errorMessage) {
+  const completedAt = new Date().toISOString();
+  try {
+    const index = readHeadlessIndex(projectPath);
+    const entry = index.runs.find(r => r.runId === runId);
+    if (entry) {
+      entry.status = status;
+      entry.completedAt = completedAt;
+      entry.exitCode = exitCode;
+      if (entry.startedAt) {
+        entry.durationMs = new Date(completedAt).getTime() - new Date(entry.startedAt).getTime();
+      }
+      if (errorMessage) entry.error = errorMessage;
+      writeHeadlessIndex(projectPath, index);
+    }
+    if (mainWindow) {
+      mainWindow.webContents.send('headless:completed', {
+        projectPath, runId, status, exitCode, completedAt,
+        durationMs: entry ? entry.durationMs : 0,
+        title: entry ? entry.title : ''
+      });
+    }
+  } catch (err) {
+    console.error('finalizeHeadlessRun failed:', err);
+  }
+}
+
+function cancelHeadless(runId) {
+  const entry = runningHeadless.get(runId);
+  if (!entry) return false;
+  entry.cancelled = true;
+  try { entry.child.kill(); } catch { /* ignore */ }
+  return true;
+}
+
+function deleteHeadless(projectPath, runId) {
+  const index = readHeadlessIndex(projectPath);
+  const before = index.runs.length;
+  index.runs = index.runs.filter(r => r.runId !== runId);
+  if (index.runs.length === before) return false;
+  writeHeadlessIndex(projectPath, index);
+  deleteHeadlessOutputFile(projectPath, runId);
+  return true;
 }
 
 async function runAgent(automationId, agentId) {
