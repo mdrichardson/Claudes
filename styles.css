@@ -5250,3 +5250,61 @@ body.mode-popout #btn-add-project {
   font-size: 10px;
   cursor: help;
 }
+
+/* ============================================================
+   Headless Chip
+   ============================================================ */
+
+.headless-chip {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 250;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: #2a2a45;
+  color: #e6e6f0;
+  border: 1px solid var(--border-primary, #3a3a5a);
+  border-radius: 999px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  user-select: none;
+}
+
+.headless-chip:hover {
+  background: #34345a;
+}
+
+.headless-chip.hidden {
+  display: none;
+}
+
+.headless-chip.state-running .headless-chip-icon::before {
+  content: '\25D4'; /* rotating circle glyph, will animate */
+  display: inline-block;
+  animation: headless-spin 1s linear infinite;
+}
+
+.headless-chip.state-done .headless-chip-icon::before {
+  content: '\25CF';
+  color: #4ade80;
+}
+
+.headless-chip.state-new .headless-chip-icon::before {
+  content: '\25CF';
+  color: #facc15;
+}
+
+.headless-chip.state-error .headless-chip-icon::before {
+  content: '\25CF';
+  color: #f87171;
+}
+
+@keyframes headless-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
