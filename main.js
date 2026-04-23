@@ -2465,6 +2465,35 @@ function applyHeadlessEviction(projectPath, index) {
   return { ...index, runs: kept };
 }
 
+function reconcileInterruptedHeadlessRuns() {
+  try {
+    const cfg = readConfig();
+    if (!Array.isArray(cfg.projects)) return;
+    for (const project of cfg.projects) {
+      if (!project || !project.path) continue;
+      if (!fs.existsSync(headlessIndexPath(project.path))) continue;
+      const index = readHeadlessIndex(project.path);
+      let changed = false;
+      for (const entry of index.runs) {
+        if (entry.status === 'running') {
+          entry.status = 'interrupted';
+          entry.completedAt = new Date().toISOString();
+          if (entry.startedAt) {
+            entry.durationMs = new Date(entry.completedAt).getTime() - new Date(entry.startedAt).getTime();
+          }
+          changed = true;
+        }
+      }
+      if (changed) {
+        try { writeHeadlessIndex(project.path, index); }
+        catch (err) { console.error('headless reconcile write failed:', err); }
+      }
+    }
+  } catch (err) {
+    console.error('reconcileInterruptedHeadlessRuns failed:', err);
+  }
+}
+
 function findClaudePath() {
   try {
     const result = execFileSync('where', ['claude'], { encoding: 'utf8' });
@@ -3528,6 +3557,7 @@ if (!gotLock) {
   }
 
   app.whenReady().then(async () => {
+    reconcileInterruptedHeadlessRuns();
     await startPtyServer();
     startHookServer();
     createTray();
