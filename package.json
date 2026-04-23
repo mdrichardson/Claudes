@@ -10,7 +10,8 @@
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac",
-    "dist:publish": "electron-builder --publish always"
+    "dist:publish": "electron-builder --publish always",
+    "test": "node --test test/"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
