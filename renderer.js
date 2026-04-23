@@ -9500,7 +9500,16 @@ document.getElementById('btn-automation-copy-output').addEventListener('click', 
     clearError();
     const connectionString = connStringInput.value;
     const dbName = dbNameInput.value;
-    const result = await window.electronAPI.sharing.configureConnection({ connectionString, dbName });
+    let result;
+    try {
+      result = await window.electronAPI.sharing.configureConnection({ connectionString, dbName });
+    } catch (err) {
+      // IPC channel lost (main crashed, app is quitting). Re-enable the button so
+      // the user isn't stuck on a dead UI state; surface a generic message.
+      connectBtn.disabled = false;
+      showError('Unexpected error communicating with the main process.');
+      return;
+    }
     if (!result.ok) {
       showError(result.error);
     } else {
