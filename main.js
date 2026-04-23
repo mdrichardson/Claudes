@@ -2562,7 +2562,9 @@ function isWithinRunWindow(window, now) {
   return false;
 }
 
-function shouldRunAgent(agent, now) {
+function shouldRunAgent(data, automation, agent, now) {
+  if (!isWithinRunWindow(data.runWindow, now)) return false;
+  if (!isWithinRunWindow(automation.runWindow, now)) return false;
   if (!agent.enabled) return false;
   if (agent.currentRunStartedAt) return false;
   if (agent.runMode === 'run_after') return false; // Only triggered by upstream completion
@@ -3368,7 +3370,7 @@ function startAutomationScheduler() {
     autoData.automations.forEach(automation => {
       if (!automation.enabled) return;
       automation.agents.forEach(agent => {
-        if (shouldRunAgent(agent, now)) {
+        if (shouldRunAgent(autoData, automation, agent, now)) {
           runAgent(automation.id, agent.id);
         }
       });
