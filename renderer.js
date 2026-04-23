@@ -1239,6 +1239,21 @@ function buildProjectItem(project, index) {
   var name = document.createElement('div');
   name.className = 'project-name';
   name.textContent = project.name;
+  name.addEventListener('dblclick', function (e) {
+    e.stopPropagation();
+    var existingBadge = name.querySelector('.project-popout-badge');
+    if (existingBadge) existingBadge.remove();
+    var trailing = name.lastChild;
+    if (trailing && trailing.nodeType === 3 && trailing.data === ' ') trailing.remove();
+    name.textContent = config.projects[index].name || '';
+    startInlineRename(name, {
+      onCommit: function (text) {
+        config.projects[index].name = text;
+        saveConfig();
+        renderProjectList();
+      }
+    });
+  });
   if (project.poppedOut) {
     var badge = document.createElement('span');
     badge.className = 'project-popout-badge';
@@ -1928,36 +1943,77 @@ function createColumnHeader(id, customTitle, opts) {
   return header;
 }
 
-function startTitleEdit(id, titleEl) {
-  if (titleEl.contentEditable === 'true') return;
-  titleEl.contentEditable = 'true';
-  titleEl.classList.add('editing');
-  titleEl.focus();
+// Shared contenteditable inline-rename helper. Used by column title, project
+// name, and workspace name rename. On Enter or blur, commits with trimmed text
+// by calling onCommit(text). On Escape, reverts to the prior text (no commit).
+// If committed text is empty, the element's textContent is set to onEmpty() when
+// provided (else reverted to prior text) and onCommit is NOT called. Paste is
+// forced to plain text to prevent clipboard HTML from landing in the DOM.
+function startInlineRename(el, opts) {
+  if (!el || el.contentEditable === 'true') return;
+  opts = opts || {};
+  var onCommit = opts.onCommit || function () {};
+  var onEmpty = opts.onEmpty || null;
+  var priorText = el.textContent;
+
+  el.contentEditable = 'true';
+  el.classList.add('editing');
+  el.focus();
   var range = document.createRange();
-  range.selectNodeContents(titleEl);
+  range.selectNodeContents(el);
   var sel = window.getSelection();
   sel.removeAllRanges();
   sel.addRange(range);
 
-  function finishEdit() {
-    titleEl.contentEditable = 'false';
-    titleEl.classList.remove('editing');
-    var newTitle = titleEl.textContent.trim();
-    var col = allColumns.get(id);
-    if (col) {
-      col.customTitle = newTitle || null;
-      if (!newTitle) titleEl.textContent = 'Claude #' + id;
-      persistSessions(col.projectKey);
+  function stopClick(e) { e.stopPropagation(); }
+  function onPaste(e) {
+    e.preventDefault();
+    var text = (e.clipboardData || window.clipboardData).getData('text/plain') || '';
+    document.execCommand('insertText', false, text);
+  }
+  function onKeydown(e) {
+    if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
+    else if (e.key === 'Escape') {
+      escaped = true;
+      el.textContent = priorText;
+      el.blur();
     }
   }
-  titleEl.addEventListener('blur', finishEdit, { once: true });
-  titleEl.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') { e.preventDefault(); titleEl.blur(); }
-    if (e.key === 'Escape') {
-      var col = allColumns.get(id);
-      titleEl.textContent = (col && col.customTitle) || ('Claude #' + id);
-      titleEl.blur();
+  var escaped = false;
+
+  el.addEventListener('mousedown', stopClick);
+  el.addEventListener('click', stopClick);
+  el.addEventListener('paste', onPaste);
+  el.addEventListener('keydown', onKeydown);
+
+  function finishEdit() {
+    el.contentEditable = 'false';
+    el.classList.remove('editing');
+    el.removeEventListener('mousedown', stopClick);
+    el.removeEventListener('click', stopClick);
+    el.removeEventListener('paste', onPaste);
+    el.removeEventListener('keydown', onKeydown);
+    if (escaped) return;
+    var next = el.textContent.trim();
+    if (!next) {
+      el.textContent = onEmpty ? onEmpty() : priorText;
+      return;
     }
+    el.textContent = next;
+    onCommit(next);
+  }
+  el.addEventListener('blur', finishEdit, { once: true });
+}
+
+function startTitleEdit(id, titleEl) {
+  startInlineRename(titleEl, {
+    onCommit: function (text) {
+      var col = allColumns.get(id);
+      if (!col) return;
+      col.customTitle = text;
+      persistSessions(col.projectKey);
+    },
+    onEmpty: function () { return 'Claude #' + id; }
   });
 }
 

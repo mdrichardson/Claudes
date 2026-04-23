@@ -1023,7 +1023,9 @@ html, body {
   flex-shrink: 1;
 }
 
-.column-header .col-title.editing {
+.column-header .col-title.editing,
+.project-item .project-name.editing,
+.workspace-item .workspace-name.editing {
   cursor: text;
   background: var(--bg-button);
   outline: 1px solid var(--accent);
@@ -1032,6 +1034,7 @@ html, body {
   color: var(--text-bright);
   overflow: visible;
   text-overflow: clip;
+  white-space: nowrap;
 }
 
 .col-actions {
