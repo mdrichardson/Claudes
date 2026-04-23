@@ -2138,6 +2138,13 @@ function addColumn(args, targetRow, opts) {
     fitAddon.fit();
     if (opts.reattachPtyId != null) {
       // Pty already exists in pty-server — just rebind it to this window's WS.
+      // Claude CLI hides xterm's cursor at startup via DECTCEM (\e[?25l) and
+      // enables focus reporting via \e[?1004h so it can animate its own
+      // block cursor only on the focused terminal. Reattach creates a fresh
+      // xterm with both modes at defaults, but running Claude won't re-send
+      // the init sequences — re-apply them here so the reattached terminal
+      // matches what Claude expects.
+      terminal.write('\x1b[?25l\x1b[?1004h');
       wsSend({ type: 'reattach', id: id, cols: terminal.cols, rows: terminal.rows });
       return;
     }
