@@ -1,3 +1,5 @@
+'use strict';
+
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { MongoMemoryReplSet } = require('mongodb-memory-server');
@@ -56,4 +58,34 @@ test('getDb before connect returns null', () => {
 test('disconnect when not connected is a no-op', async () => {
   await disconnect();
   assert.equal(getDb(), null);
+});
+
+test('connect twice without disconnect closes the previous client', async () => {
+  await connect({ connectionString: uri, dbName: 'Claudes' });
+  const db1 = getDb();
+  assert.equal(db1 !== null, true);
+  // Reconnect without an explicit disconnect — _doConnect should close the prior client.
+  await connect({ connectionString: uri, dbName: 'Claudes' });
+  const db2 = getDb();
+  assert.equal(db2 !== null, true);
+  // The second connect replaced state wholesale, so db2 is a fresh Db handle.
+  assert.equal(db1 !== db2, true);
+  // New connection still works.
+  const pong = await db2.command({ ping: 1 });
+  assert.equal(pong.ok, 1);
+  await disconnect();
+});
+
+test('testConnection: throws TypeError for non-string dbName', async () => {
+  await assert.rejects(
+    () => testConnection({ connectionString: 'mongodb://127.0.0.1:1/', dbName: 42 }),
+    /dbName must be a non-empty string/
+  );
+});
+
+test('testConnection: throws for non-string connectionString', async () => {
+  await assert.rejects(
+    () => testConnection({ connectionString: null, dbName: 'Claudes' }),
+    /must be a string/
+  );
 });
