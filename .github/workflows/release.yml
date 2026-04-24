@@ -1,9 +1,9 @@
-name: Release
+name: Release (personal)
 
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*-personal.*'
 
 permissions:
   contents: write
@@ -21,7 +21,7 @@ jobs:
       - run: npm install
 
       - name: Build Windows installer
-        run: npx electron-builder --win --publish never
+        run: npx electron-builder --win --publish never -c.publish.owner=mdrichardson -c.publish.repo=Claudes
 
       - uses: actions/upload-artifact@v4
         with:
@@ -43,7 +43,7 @@ jobs:
       - run: npm install
 
       - name: Build macOS installer
-        run: npx electron-builder --mac --publish never
+        run: npx electron-builder --mac --publish never -c.publish.owner=mdrichardson -c.publish.repo=Claudes
 
       - uses: actions/upload-artifact@v4
         with:
