@@ -83,7 +83,7 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "paulallington",
+      "owner": "mdrichardson",
       "repo": "Claudes"
     }
   }
