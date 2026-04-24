@@ -1995,7 +1995,14 @@ function setActiveWorkspace(projectIndex, workspaceId, isStartup) {
   loadSpawnOptions();
 
   if (state.columns.size === 0) {
-    if (isStartup && window.electronAPI) {
+    // Always restore from disk when we have no in-memory columns for this
+    // (project, workspace) — startup OR first post-startup navigation. The
+    // old `isStartup`-gated branch spawned 1 default column on navigation,
+    // which then triggered persistSessions and OVERWROTE the saved session
+    // list for that workspace. restoreSessions internally falls back to a
+    // default spawn when no sessions are saved, so this branch is safe
+    // for both populated and empty cases.
+    if (window.electronAPI) {
       restoreSessions(project.path, workspaceId);
     } else {
       var spawnArgs = buildSpawnArgs();
