@@ -9927,46 +9927,73 @@ document.getElementById('btn-automation-copy-output').addEventListener('click', 
   var MIN_H = 80;
   var HEADER_VISIBLE = 24; // px of header that must stay within columns-container
 
-  var notesByProject = new Map();   // projectKey -> notes[]
-  var loadedProjects = new Set();   // projectKeys we've already fetched from disk
-  var loadingProjects = new Map();  // projectKey -> Promise (in-flight load)
+  var notesByProject = new Map();   // storeKey (stateKey) -> notes[]
+  var loadedProjects = new Set();   // storeKeys we've already fetched from disk
+  var loadingProjects = new Map();  // storeKey -> Promise (in-flight load)
   var openPopoverNoteId = null;
 
   function genId() {
     return 'note_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
   }
 
-  function currentProjectKey() {
-    // activeProjectKey is a module-level var in renderer.js — closure-captured at call time.
-    return typeof activeProjectKey !== 'undefined' ? activeProjectKey : null;
+  // personal-only: sticky-notes now track a (projectPath, workspaceId) pair so
+  // each workspace has its own overlay. Internal Map keys are the composite
+  // stateKey; each save/load IPC passes the two components separately so main
+  // can derive the on-disk filename.
+  function currentStickyKey() {
+    if (typeof activeProjectKey !== 'string' || !activeProjectKey) return null;
+    var proj = (typeof config !== 'undefined' && config.projects) ? config.projects[config.activeProjectIndex] : null;
+    var wsId = (proj && proj.activeWorkspaceId != null) ? proj.activeWorkspaceId : null;
+    var store = (typeof stateKey === 'function') ? stateKey(activeProjectKey, wsId) : activeProjectKey;
+    return { projectPath: activeProjectKey, workspaceId: wsId, store: store };
   }
 
-  function getNotes(projectKey) {
-    if (!projectKey) return [];
-    var arr = notesByProject.get(projectKey);
+  // Retained as an alias so any existing call sites keep working — returns
+  // the composite store key (string) rather than the bare projectPath.
+  function currentProjectKey() {
+    var k = currentStickyKey();
+    return k ? k.store : null;
+  }
+
+  function getNotes(storeKey) {
+    if (!storeKey) return [];
+    var arr = notesByProject.get(storeKey);
     if (!arr) {
       arr = [];
-      notesByProject.set(projectKey, arr);
+      notesByProject.set(storeKey, arr);
     }
     return arr;
   }
 
-  function save(projectKey) {
-    if (!projectKey) return;
+  function save(storeKey) {
+    if (!storeKey) return;
     if (!window.electronAPI || !window.electronAPI.saveStickyNotes) return;
-    var notes = getNotes(projectKey);
-    window.electronAPI.saveStickyNotes(projectKey, notes);
+    var notes = getNotes(storeKey);
+    var k = currentStickyKey();
+    if (!k || k.store !== storeKey) {
+      // Project/workspace switched between change and flush — re-decompose from storeKey.
+      var sep = storeKey.indexOf('::');
+      var p = (sep < 0) ? storeKey : storeKey.slice(0, sep);
+      var w = (sep < 0) ? null : storeKey.slice(sep + 2);
+      window.electronAPI.saveStickyNotes(p, w, notes);
+      return;
+    }
+    window.electronAPI.saveStickyNotes(k.projectPath, k.workspaceId, notes);
   }
 
-  function ensureLoaded(projectKey) {
-    if (!projectKey) return Promise.resolve([]);
-    if (loadedProjects.has(projectKey)) return Promise.resolve(getNotes(projectKey));
-    if (loadingProjects.has(projectKey)) return loadingProjects.get(projectKey);
+  function ensureLoaded(storeKey) {
+    if (!storeKey) return Promise.resolve([]);
+    if (loadedProjects.has(storeKey)) return Promise.resolve(getNotes(storeKey));
+    if (loadingProjects.has(storeKey)) return loadingProjects.get(storeKey);
     if (!window.electronAPI || !window.electronAPI.loadStickyNotes) {
-      loadedProjects.add(projectKey);
+      loadedProjects.add(storeKey);
       return Promise.resolve([]);
     }
-    var p = window.electronAPI.loadStickyNotes(projectKey).then(function (notes) {
+    // Decompose storeKey → (projectPath, workspaceId) for the IPC call.
+    var sep = storeKey.indexOf('::');
+    var projPath = (sep < 0) ? storeKey : storeKey.slice(0, sep);
+    var wsId = (sep < 0) ? null : storeKey.slice(sep + 2);
+    var p = window.electronAPI.loadStickyNotes(projPath, wsId).then(function (notes) {
       var arr = Array.isArray(notes) ? notes.slice() : [];
       // Normalize defaults defensively (main.js also defaults them, but belt-and-braces).
       for (var i = 0; i < arr.length; i++) {
@@ -9979,18 +10006,18 @@ document.getElementById('btn-automation-copy-output').addEventListener('click', 
         if (STICKY_COLORS.indexOf(arr[i].color) < 0) arr[i].color = DEFAULT_COLOR;
         if (typeof arr[i].fontSize !== 'number') arr[i].fontSize = DEFAULT_FONT_SIZE;
       }
-      notesByProject.set(projectKey, arr);
-      loadedProjects.add(projectKey);
-      loadingProjects.delete(projectKey);
+      notesByProject.set(storeKey, arr);
+      loadedProjects.add(storeKey);
+      loadingProjects.delete(storeKey);
       return arr;
     }).catch(function (err) {
       console.error('loadStickyNotes failed:', err);
-      notesByProject.set(projectKey, []);
-      loadedProjects.add(projectKey);
-      loadingProjects.delete(projectKey);
+      notesByProject.set(storeKey, []);
+      loadedProjects.add(storeKey);
+      loadingProjects.delete(storeKey);
       return [];
     });
-    loadingProjects.set(projectKey, p);
+    loadingProjects.set(storeKey, p);
     return p;
   }
 

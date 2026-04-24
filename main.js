@@ -722,48 +722,67 @@ ipcMain.handle('sessions:load', (event, projectPath) => {
 });
 
 // --- Sticky Notes Persistence ---
-// Per-project file at <project>/.claudes/sticky-notes.json.
-// Writes are debounced per-projectPath, atomic (tmp + rename), and flushed on quit.
+// Primary: <project>/.claudes/sticky-notes.json (back-compat with pre-workspaces users).
+// Sub-workspace: <project>/.claudes/sticky-notes-<workspaceId>.json — one overlay per workspace.
+// Writes are debounced per-(project, workspace), atomic (tmp + rename), and flushed on quit.
 // Malformed JSON on load is quarantined to sticky-notes.corrupt-<ts>.json so user content isn't silently overwritten.
+//
+// personal-only: workspace awareness added on the personal/main branch so the
+// mdrichardson fork ships a usable build before upstream rebases either
+// feat/workspaces or feat/sticky-notes to absorb the same fix. See
+// docs/superpowers/plans/2026-04-24-sticky-notes-workspace-aware-rebase.md
+// (on feat/workspaces) for the upstream plan.
 
 const STICKY_NOTES_WRITE_DEBOUNCE_MS = 400;
-const pendingStickyNotes = new Map(); // projectPath -> { timer, notes }
+const pendingStickyNotes = new Map(); // stickyKey -> { projectPath, workspaceId, timer, notes }
 
-function writeStickyNotesAtomic(projectPath, notes) {
+function stickyKey(projectPath, workspaceId) {
+  return (workspaceId == null) ? projectPath : (projectPath + '::' + workspaceId);
+}
+
+function stickyNotesFile(projectPath, workspaceId) {
+  const dir = path.join(projectPath, '.claudes');
+  return (workspaceId == null)
+    ? path.join(dir, 'sticky-notes.json')
+    : path.join(dir, 'sticky-notes-' + workspaceId + '.json');
+}
+
+function writeStickyNotesAtomic(projectPath, workspaceId, notes) {
   const claudesDir = path.join(projectPath, '.claudes');
   if (!fs.existsSync(claudesDir)) {
     fs.mkdirSync(claudesDir, { recursive: true });
   }
-  const target = path.join(claudesDir, 'sticky-notes.json');
+  const target = stickyNotesFile(projectPath, workspaceId);
   const tmp = target + '.tmp';
   const payload = JSON.stringify({ notes: Array.isArray(notes) ? notes : [] }, null, 2);
   fs.writeFileSync(tmp, payload, 'utf8');
   fs.renameSync(tmp, target);
 }
 
-function scheduleWriteStickyNotes(projectPath, notes) {
-  const existing = pendingStickyNotes.get(projectPath);
+function scheduleWriteStickyNotes(projectPath, workspaceId, notes) {
+  const key = stickyKey(projectPath, workspaceId);
+  const existing = pendingStickyNotes.get(key);
   if (existing && existing.timer) {
     clearTimeout(existing.timer);
   }
-  const entry = { notes: notes, timer: null };
+  const entry = { projectPath, workspaceId, notes, timer: null };
   entry.timer = setTimeout(() => {
-    pendingStickyNotes.delete(projectPath);
-    try { writeStickyNotesAtomic(projectPath, entry.notes); } catch (err) { console.error('writeStickyNotes failed:', err); }
+    pendingStickyNotes.delete(key);
+    try { writeStickyNotesAtomic(projectPath, workspaceId, entry.notes); } catch (err) { console.error('writeStickyNotes failed:', err); }
   }, STICKY_NOTES_WRITE_DEBOUNCE_MS);
-  pendingStickyNotes.set(projectPath, entry);
+  pendingStickyNotes.set(key, entry);
 }
 
 function flushPendingStickyNotes() {
-  for (const [projectPath, entry] of pendingStickyNotes.entries()) {
+  for (const [, entry] of pendingStickyNotes.entries()) {
     if (entry.timer) clearTimeout(entry.timer);
-    try { writeStickyNotesAtomic(projectPath, entry.notes); } catch (err) { console.error('writeStickyNotes failed:', err); }
+    try { writeStickyNotesAtomic(entry.projectPath, entry.workspaceId, entry.notes); } catch (err) { console.error('writeStickyNotes failed:', err); }
   }
   pendingStickyNotes.clear();
 }
 
-ipcMain.handle('sticky-notes:load', (event, projectPath) => {
-  const notesFile = path.join(projectPath, '.claudes', 'sticky-notes.json');
+ipcMain.handle('sticky-notes:load', (event, projectPath, workspaceId) => {
+  const notesFile = stickyNotesFile(projectPath, workspaceId);
   if (!fs.existsSync(notesFile)) return [];
   let raw;
   try {
@@ -776,7 +795,8 @@ ipcMain.handle('sticky-notes:load', (event, projectPath) => {
     data = JSON.parse(raw);
   } catch {
     try {
-      const corrupt = path.join(projectPath, '.claudes', 'sticky-notes.corrupt-' + Date.now() + '.json');
+      const corrupt = path.join(projectPath, '.claudes',
+        'sticky-notes' + (workspaceId == null ? '' : '-' + workspaceId) + '.corrupt-' + Date.now() + '.json');
       fs.renameSync(notesFile, corrupt);
     } catch (err) {
       console.error('sticky-notes quarantine failed:', err);
@@ -797,8 +817,8 @@ ipcMain.handle('sticky-notes:load', (event, projectPath) => {
   }));
 });
 
-ipcMain.handle('sticky-notes:save', (event, projectPath, notes) => {
-  scheduleWriteStickyNotes(projectPath, notes);
+ipcMain.handle('sticky-notes:save', (event, projectPath, workspaceId, notes) => {
+  scheduleWriteStickyNotes(projectPath, workspaceId, notes);
 });
 
 // --- CLAUDE.md Management ---
