@@ -683,23 +683,41 @@ ipcMain.handle('sessions:getTitle', (event, projectPath, sessionId) => {
   }
 });
 
-// Save/load session state per project (which sessions were open in columns)
-ipcMain.handle('sessions:save', (event, projectPath, sessionData) => {
+// Save/load session state per project.
+//
+// Disk shape (current): { sessions: [...], workspaces: { "<ws-id>": { sessions: [...] } } }
+// Legacy shape:          { sessions: [...] }  — loaded as blob.sessions with workspaces:{}.
+//
+// The renderer drives the full blob — this handler just persists it atomically
+// (tmp+rename so a partial write can't corrupt multi-workspace state).
+ipcMain.handle('sessions:save', (event, projectPath, blob) => {
   const claudesDir = path.join(projectPath, '.claudes');
   if (!fs.existsSync(claudesDir)) {
     fs.mkdirSync(claudesDir, { recursive: true });
   }
-  const sessionsFile = path.join(claudesDir, 'sessions.json');
-  fs.writeFileSync(sessionsFile, JSON.stringify({ sessions: sessionData }, null, 2), 'utf8');
+  const target = path.join(claudesDir, 'sessions.json');
+  const tmp = target + '.tmp';
+  // Accept either the new blob shape or a bare array (legacy callers).
+  const payload = Array.isArray(blob)
+    ? { sessions: blob, workspaces: {} }
+    : {
+        sessions: Array.isArray(blob && blob.sessions) ? blob.sessions : [],
+        workspaces: (blob && blob.workspaces && typeof blob.workspaces === 'object') ? blob.workspaces : {}
+      };
+  fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8');
+  fs.renameSync(tmp, target);
 });
 
 ipcMain.handle('sessions:load', (event, projectPath) => {
   const sessionsFile = path.join(projectPath, '.claudes', 'sessions.json');
   try {
     const data = JSON.parse(fs.readFileSync(sessionsFile, 'utf8'));
-    return data.sessions || [];
+    return {
+      sessions: Array.isArray(data && data.sessions) ? data.sessions : [],
+      workspaces: (data && data.workspaces && typeof data.workspaces === 'object') ? data.workspaces : {}
+    };
   } catch {
-    return [];
+    return { sessions: [], workspaces: {} };
   }
 });
 
