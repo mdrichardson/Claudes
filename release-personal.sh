@@ -86,15 +86,17 @@ esac
 
 echo "==> Personal release: Claudes v${VERSION} (was v${CURRENT})"
 
+if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
+  echo "ERROR: tag v${VERSION} already exists locally. Aborting before mutation."
+  echo "       Pick a different version or delete the existing tag first:"
+  echo "         git tag -d v${VERSION}"
+  exit 1
+fi
+
 # ---- Release steps ----------------------------------------------------------
 
-# Stage any outstanding changes (guard above means there should be none, but
-# mirror release.sh's defensive pattern in case the guard is ever relaxed).
-CHANGES=$(git status --porcelain)
-if [ -n "$CHANGES" ]; then
-  echo "==> Staging outstanding changes..."
-  git add -A
-fi
+# Dirty-tree guard above ensures nothing else is staged. package.json is the
+# only file we touch here; stage it explicitly below.
 
 # Update version in package.json (preserves trailing newline).
 node -e "
@@ -111,8 +113,22 @@ git tag "v${VERSION}"
 echo "==> Committed and tagged v${VERSION}"
 
 # Push to the mdrichardson fork ONLY. Never origin (paulallington/Claudes).
-git push mdrichardson personal/main
-git push mdrichardson "v${VERSION}"
+if ! git push mdrichardson personal/main; then
+  echo ""
+  echo "ERROR: push of personal/main to mdrichardson failed."
+  echo "       The commit and tag v${VERSION} are already on your local personal/main."
+  echo "       Do NOT re-run this script (it would bump the version AGAIN)."
+  echo "       Once the push issue is resolved, run manually:"
+  echo "         git push mdrichardson personal/main"
+  echo "         git push mdrichardson v${VERSION}"
+  exit 1
+fi
+if ! git push mdrichardson "v${VERSION}"; then
+  echo ""
+  echo "ERROR: tag push failed, but personal/main pushed."
+  echo "       Run manually: git push mdrichardson v${VERSION}"
+  exit 1
+fi
 echo "==> Pushed personal/main and v${VERSION} to mdrichardson"
 
 echo ""
