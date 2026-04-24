@@ -1643,6 +1643,9 @@ function setActiveProject(index, isStartup) {
     refitAll();
   }
   loadHeadlessRunsForActiveProject();
+  if (typeof window.__renderStickyNotesForActiveProject === 'function') {
+    window.__renderStickyNotesForActiveProject();
+  }
 }
 
 function restoreProjectSessions(projectPath, project) {
@@ -9404,4 +9407,474 @@ document.getElementById('btn-automation-copy-output').addEventListener('click', 
     updateAction.style.display = '';
     updateBar.classList.remove('hidden');
   };
+})();
+
+// ============================================================
+// Sticky Notes
+// ============================================================
+(function setupStickyNotes() {
+  var container = document.getElementById('sticky-notes-container');
+  var columnsContainerEl = document.getElementById('columns-container');
+  var btn = document.getElementById('btn-sticky-notes');
+  if (!container || !columnsContainerEl || !btn) return;
+
+  var STICKY_COLORS = ['yellow', 'pink', 'green', 'blue', 'purple', 'gray'];
+  var DEFAULT_COLOR = 'yellow';
+  var DEFAULT_FONT_SIZE = 15;
+  var FONT_MIN = 10;
+  var FONT_MAX = 24;
+  var MIN_W = 120;
+  var MIN_H = 80;
+  var HEADER_VISIBLE = 24; // px of header that must stay within columns-container
+
+  var notesByProject = new Map();   // projectKey -> notes[]
+  var loadedProjects = new Set();   // projectKeys we've already fetched from disk
+  var loadingProjects = new Map();  // projectKey -> Promise (in-flight load)
+  var openPopoverNoteId = null;
+
+  function genId() {
+    return 'note_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+  }
+
+  function currentProjectKey() {
+    // activeProjectKey is a module-level var in renderer.js — closure-captured at call time.
+    return typeof activeProjectKey !== 'undefined' ? activeProjectKey : null;
+  }
+
+  function getNotes(projectKey) {
+    if (!projectKey) return [];
+    var arr = notesByProject.get(projectKey);
+    if (!arr) {
+      arr = [];
+      notesByProject.set(projectKey, arr);
+    }
+    return arr;
+  }
+
+  function save(projectKey) {
+    if (!projectKey) return;
+    if (!window.electronAPI || !window.electronAPI.saveStickyNotes) return;
+    var notes = getNotes(projectKey);
+    window.electronAPI.saveStickyNotes(projectKey, notes);
+  }
+
+  function ensureLoaded(projectKey) {
+    if (!projectKey) return Promise.resolve([]);
+    if (loadedProjects.has(projectKey)) return Promise.resolve(getNotes(projectKey));
+    if (loadingProjects.has(projectKey)) return loadingProjects.get(projectKey);
+    if (!window.electronAPI || !window.electronAPI.loadStickyNotes) {
+      loadedProjects.add(projectKey);
+      return Promise.resolve([]);
+    }
+    var p = window.electronAPI.loadStickyNotes(projectKey).then(function (notes) {
+      var arr = Array.isArray(notes) ? notes.slice() : [];
+      // Normalize defaults defensively (main.js also defaults them, but belt-and-braces).
+      for (var i = 0; i < arr.length; i++) {
+        if (!arr[i].id) arr[i].id = genId();
+        if (typeof arr[i].content !== 'string') arr[i].content = '';
+        if (typeof arr[i].x !== 'number') arr[i].x = 20;
+        if (typeof arr[i].y !== 'number') arr[i].y = 20;
+        if (typeof arr[i].width !== 'number') arr[i].width = 240;
+        if (typeof arr[i].height !== 'number') arr[i].height = 180;
+        if (STICKY_COLORS.indexOf(arr[i].color) < 0) arr[i].color = DEFAULT_COLOR;
+        if (typeof arr[i].fontSize !== 'number') arr[i].fontSize = DEFAULT_FONT_SIZE;
+      }
+      notesByProject.set(projectKey, arr);
+      loadedProjects.add(projectKey);
+      loadingProjects.delete(projectKey);
+      return arr;
+    }).catch(function (err) {
+      console.error('loadStickyNotes failed:', err);
+      notesByProject.set(projectKey, []);
+      loadedProjects.add(projectKey);
+      loadingProjects.delete(projectKey);
+      return [];
+    });
+    loadingProjects.set(projectKey, p);
+    return p;
+  }
+
+  function clampPosition(note) {
+    var rect = columnsContainerEl.getBoundingClientRect();
+    var maxX = Math.max(0, rect.width - HEADER_VISIBLE);
+    var minX = -(note.width - HEADER_VISIBLE);
+    var maxY = Math.max(0, rect.height - HEADER_VISIBLE);
+    var minY = 0; // keep above top edge of columns-container (toolbar stays clear)
+    if (note.x > maxX) note.x = maxX;
+    if (note.x < minX) note.x = minX;
+    if (note.y > maxY) note.y = maxY;
+    if (note.y < minY) note.y = minY;
+  }
+
+  function applyNoteStyle(noteEl, note) {
+    noteEl.style.left = note.x + 'px';
+    noteEl.style.top = note.y + 'px';
+    noteEl.style.width = note.width + 'px';
+    noteEl.style.height = note.height + 'px';
+    noteEl.style.fontSize = note.fontSize + 'px';
+    noteEl.setAttribute('data-color', note.color);
+  }
+
+  function createNoteElement(note) {
+    var el = document.createElement('div');
+    el.className = 'sticky-note';
+    el.setAttribute('data-note-id', note.id);
+    applyNoteStyle(el, note);
+
+    var header = document.createElement('div');
+    header.className = 'sticky-note-header';
+
+    var settingsBtn = document.createElement('button');
+    settingsBtn.className = 'sticky-note-settings';
+    settingsBtn.title = 'Color and size';
+    settingsBtn.innerHTML = '&#9881;';
+
+    var closeBtn = document.createElement('button');
+    closeBtn.className = 'sticky-note-close';
+    closeBtn.title = 'Delete';
+    closeBtn.innerHTML = '&times;';
+
+    header.appendChild(settingsBtn);
+    header.appendChild(closeBtn);
+
+    var body = document.createElement('textarea');
+    body.className = 'sticky-note-body';
+    body.setAttribute('spellcheck', 'false');
+    body.value = note.content || '';
+
+    el.appendChild(header);
+    el.appendChild(body);
+
+    var dirs = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
+    for (var i = 0; i < dirs.length; i++) {
+      var h = document.createElement('div');
+      h.className = 'sticky-note-resize ' + dirs[i];
+      h.setAttribute('data-dir', dirs[i]);
+      el.appendChild(h);
+    }
+
+    var popover = buildPopover(note);
+    el.appendChild(popover);
+
+    wireNote(el, note, header, settingsBtn, closeBtn, body, popover);
+    return el;
+  }
+
+  function buildPopover(note) {
+    var pop = document.createElement('div');
+    pop.className = 'sticky-note-popover';
+
+    var swatches = document.createElement('div');
+    swatches.className = 'sticky-note-swatches';
+    for (var i = 0; i < STICKY_COLORS.length; i++) {
+      var c = STICKY_COLORS[i];
+      var sw = document.createElement('button');
+      sw.className = 'sticky-swatch' + (note.color === c ? ' selected' : '');
+      sw.setAttribute('data-color', c);
+      sw.setAttribute('aria-label', c.charAt(0).toUpperCase() + c.slice(1));
+      swatches.appendChild(sw);
+    }
+
+    var fs = document.createElement('div');
+    fs.className = 'sticky-note-fontsize';
+    var dec = document.createElement('button');
+    dec.className = 'sticky-font-dec';
+    dec.title = 'Smaller';
+    dec.innerHTML = '&minus;';
+    var val = document.createElement('span');
+    val.className = 'sticky-font-value';
+    val.textContent = note.fontSize + 'px';
+    var inc = document.createElement('button');
+    inc.className = 'sticky-font-inc';
+    inc.title = 'Larger';
+    inc.textContent = '+';
+    fs.appendChild(dec);
+    fs.appendChild(val);
+    fs.appendChild(inc);
+
+    pop.appendChild(swatches);
+    pop.appendChild(fs);
+    return pop;
+  }
+
+  function closeAllPopovers() {
+    var opens = container.querySelectorAll('.sticky-note-popover.open');
+    for (var i = 0; i < opens.length; i++) opens[i].classList.remove('open');
+    openPopoverNoteId = null;
+  }
+
+  function bringToFront(note) {
+    var projectKey = currentProjectKey();
+    if (!projectKey) return;
+    var arr = getNotes(projectKey);
+    var idx = arr.indexOf(note);
+    if (idx < 0) return;
+    if (idx === arr.length - 1) return; // already on top
+    arr.splice(idx, 1);
+    arr.push(note);
+    var el = container.querySelector('.sticky-note[data-note-id="' + note.id + '"]');
+    if (el) container.appendChild(el); // re-append moves to end of DOM (top of stack)
+    save(projectKey);
+  }
+
+  function deleteNote(note) {
+    var projectKey = currentProjectKey();
+    if (!projectKey) return;
+    var arr = getNotes(projectKey);
+    var idx = arr.indexOf(note);
+    if (idx < 0) return;
+    arr.splice(idx, 1);
+    var el = container.querySelector('.sticky-note[data-note-id="' + note.id + '"]');
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+    if (openPopoverNoteId === note.id) openPopoverNoteId = null;
+    save(projectKey);
+  }
+
+  function wireNote(el, note, header, settingsBtn, closeBtn, body, popover) {
+    // Bring-to-front on any mousedown inside the note (except the gear/close buttons —
+    // they still bring to front, but drag bail-early needs to happen first).
+    el.addEventListener('mousedown', function () {
+      bringToFront(note);
+    });
+
+    // Textarea input → update + save.
+    body.addEventListener('input', function () {
+      note.content = body.value;
+      var projectKey = currentProjectKey();
+      if (projectKey) save(projectKey);
+    });
+
+    // Drag on header.
+    header.addEventListener('mousedown', function (e) {
+      if (e.target.closest('.sticky-note-settings, .sticky-note-close')) return;
+      if (e.button !== 0) return;
+      e.preventDefault();
+      var startX = e.clientX;
+      var startY = e.clientY;
+      var startLeft = note.x;
+      var startTop = note.y;
+      document.body.style.userSelect = 'none';
+      function move(ev) {
+        note.x = startLeft + (ev.clientX - startX);
+        note.y = startTop + (ev.clientY - startY);
+        clampPosition(note);
+        el.style.left = note.x + 'px';
+        el.style.top = note.y + 'px';
+      }
+      function up() {
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        document.body.style.userSelect = '';
+        var projectKey = currentProjectKey();
+        if (projectKey) save(projectKey);
+      }
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+    });
+
+    // Resize on each handle.
+    var handles = el.querySelectorAll('.sticky-note-resize');
+    for (var i = 0; i < handles.length; i++) {
+      (function (handle) {
+        handle.addEventListener('mousedown', function (e) {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          e.stopPropagation();
+          var dir = handle.getAttribute('data-dir');
+          var startX = e.clientX;
+          var startY = e.clientY;
+          var startLeft = note.x;
+          var startTop = note.y;
+          var startWidth = note.width;
+          var startHeight = note.height;
+          document.body.style.userSelect = 'none';
+          function move(ev) {
+            var dx = ev.clientX - startX;
+            var dy = ev.clientY - startY;
+            var newX = startLeft, newY = startTop, newW = startWidth, newH = startHeight;
+            if (dir.indexOf('e') >= 0) newW = Math.max(MIN_W, startWidth + dx);
+            if (dir.indexOf('w') >= 0) {
+              newW = Math.max(MIN_W, startWidth - dx);
+              newX = startLeft + (startWidth - newW);
+            }
+            if (dir.indexOf('s') >= 0) newH = Math.max(MIN_H, startHeight + dy);
+            if (dir.indexOf('n') >= 0) {
+              newH = Math.max(MIN_H, startHeight - dy);
+              newY = startTop + (startHeight - newH);
+            }
+            note.x = newX; note.y = newY; note.width = newW; note.height = newH;
+            clampPosition(note);
+            applyNoteStyle(el, note);
+          }
+          function up() {
+            document.removeEventListener('mousemove', move);
+            document.removeEventListener('mouseup', up);
+            document.body.style.userSelect = '';
+            var projectKey = currentProjectKey();
+            if (projectKey) save(projectKey);
+          }
+          document.addEventListener('mousemove', move);
+          document.addEventListener('mouseup', up);
+        });
+      })(handles[i]);
+    }
+
+    // Close button.
+    closeBtn.addEventListener('mousedown', function (e) {
+      e.stopPropagation();
+    });
+    closeBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      deleteNote(note);
+    });
+
+    // Settings button opens popover.
+    settingsBtn.addEventListener('mousedown', function (e) {
+      e.stopPropagation();
+    });
+    settingsBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var wasOpen = popover.classList.contains('open');
+      closeAllPopovers();
+      if (!wasOpen) {
+        popover.classList.add('open');
+        openPopoverNoteId = note.id;
+        // Refresh the selected swatch marker in case color changed elsewhere.
+        var swatches = popover.querySelectorAll('.sticky-swatch');
+        for (var i = 0; i < swatches.length; i++) {
+          swatches[i].classList.toggle('selected', swatches[i].getAttribute('data-color') === note.color);
+        }
+        var val = popover.querySelector('.sticky-font-value');
+        if (val) val.textContent = note.fontSize + 'px';
+      }
+    });
+
+    // Popover swatches.
+    var swatches = popover.querySelectorAll('.sticky-swatch');
+    for (var j = 0; j < swatches.length; j++) {
+      (function (sw) {
+        sw.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+        sw.addEventListener('click', function (e) {
+          e.stopPropagation();
+          var c = sw.getAttribute('data-color');
+          if (!c || STICKY_COLORS.indexOf(c) < 0) return;
+          note.color = c;
+          el.setAttribute('data-color', c);
+          var others = popover.querySelectorAll('.sticky-swatch');
+          for (var k = 0; k < others.length; k++) {
+            others[k].classList.toggle('selected', others[k].getAttribute('data-color') === c);
+          }
+          var projectKey = currentProjectKey();
+          if (projectKey) save(projectKey);
+        });
+      })(swatches[j]);
+    }
+
+    // Font size +/-.
+    var decBtn = popover.querySelector('.sticky-font-dec');
+    var incBtn = popover.querySelector('.sticky-font-inc');
+    var valEl = popover.querySelector('.sticky-font-value');
+    function bumpFont(delta) {
+      var next = note.fontSize + delta;
+      if (next < FONT_MIN) next = FONT_MIN;
+      if (next > FONT_MAX) next = FONT_MAX;
+      if (next === note.fontSize) return;
+      note.fontSize = next;
+      el.style.fontSize = next + 'px';
+      if (valEl) valEl.textContent = next + 'px';
+      var projectKey = currentProjectKey();
+      if (projectKey) save(projectKey);
+    }
+    if (decBtn) {
+      decBtn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+      decBtn.addEventListener('click', function (e) { e.stopPropagation(); bumpFont(-1); });
+    }
+    if (incBtn) {
+      incBtn.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+      incBtn.addEventListener('click', function (e) { e.stopPropagation(); bumpFont(1); });
+    }
+  }
+
+  function renderForActiveProject() {
+    while (container.firstChild) container.removeChild(container.firstChild);
+    openPopoverNoteId = null;
+    var projectKey = currentProjectKey();
+    if (!projectKey) return;
+    ensureLoaded(projectKey).then(function () {
+      // Re-check in case project switched during the load.
+      if (currentProjectKey() !== projectKey) return;
+      while (container.firstChild) container.removeChild(container.firstChild);
+      var notes = getNotes(projectKey);
+      for (var i = 0; i < notes.length; i++) {
+        clampPosition(notes[i]);
+        var el = createNoteElement(notes[i]);
+        container.appendChild(el);
+      }
+    });
+  }
+
+  function createNewNote() {
+    var projectKey = currentProjectKey();
+    if (!projectKey) return;
+    ensureLoaded(projectKey).then(function () {
+      if (currentProjectKey() !== projectKey) return;
+      var arr = getNotes(projectKey);
+      var stagger = arr.length % 10;
+      var note = {
+        id: genId(),
+        content: '',
+        x: 20 + stagger * 18,
+        y: 20 + stagger * 18,
+        width: 240,
+        height: 180,
+        color: DEFAULT_COLOR,
+        fontSize: DEFAULT_FONT_SIZE
+      };
+      clampPosition(note);
+      arr.push(note);
+      var el = createNoteElement(note);
+      container.appendChild(el);
+      save(projectKey);
+    });
+  }
+
+  btn.addEventListener('click', createNewNote);
+
+  // Document-level dismiss for the open popover. Registered once at init.
+  // Exempts both .sticky-note-popover (clicks inside the popover) and
+  // .sticky-note-settings (the gear's own click handler opens/closes it; we
+  // don't want the document listener to also fire and immediately re-close).
+  document.addEventListener('mousedown', function (e) {
+    if (!openPopoverNoteId) return;
+    if (e.target.closest('.sticky-note-popover, .sticky-note-settings')) return;
+    closeAllPopovers();
+  });
+
+  // Window resize: re-clamp every visible note against new columns-container bounds.
+  window.addEventListener('resize', function () {
+    var projectKey = currentProjectKey();
+    if (!projectKey) return;
+    var notes = getNotes(projectKey);
+    var changed = false;
+    for (var i = 0; i < notes.length; i++) {
+      var before = notes[i].x + ',' + notes[i].y;
+      clampPosition(notes[i]);
+      var after = notes[i].x + ',' + notes[i].y;
+      if (before !== after) {
+        changed = true;
+        var el = container.querySelector('.sticky-note[data-note-id="' + notes[i].id + '"]');
+        if (el) {
+          el.style.left = notes[i].x + 'px';
+          el.style.top = notes[i].y + 'px';
+        }
+      }
+    }
+    if (changed) save(projectKey);
+  });
+
+  // Expose the render hook so setActiveProject can call it.
+  window.__renderStickyNotesForActiveProject = renderForActiveProject;
+
+  // Initial render in case setActiveProject already fired before this IIFE executed.
+  renderForActiveProject();
 })();
