@@ -31,31 +31,8 @@ jobs:
             dist/Claudes-Setup-*.exe.blockmap
             dist/latest.yml
 
-  build-macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - run: npm install
-
-      - name: Build macOS installer
-        run: npx electron-builder --mac --publish never
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: macos-artifacts
-          path: |
-            dist/Claudes-*.dmg
-            dist/Claudes-*.zip
-            dist/Claudes-*.zip.blockmap
-            dist/latest-mac.yml
-
   release:
-    needs: [build-windows, build-macos]
+    needs: [build-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

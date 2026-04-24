@@ -1,5 +1,5 @@
 const { app, BrowserWindow, ipcMain, dialog, clipboard, nativeTheme, shell, Tray, Menu, nativeImage, Notification, powerMonitor } = require('electron');
-const { autoUpdater } = require('electron-updater');
+// Auto-updater disabled on personal/main — fork is private, no baked GH token.
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -1528,41 +1528,12 @@ ipcMain.handle('usage:getAll', async () => {
   return results;
 });
 
-// --- Auto Updater ---
-
-autoUpdater.autoDownload = true;
-autoUpdater.autoInstallOnAppQuit = true;
-
-function setupAutoUpdater() {
-  autoUpdater.on('update-available', (info) => {
-    mainWindow?.webContents.send('update:available', {
-      version: info.version,
-      releaseNotes: info.releaseNotes || ''
-    });
-  });
-
-  autoUpdater.on('update-downloaded', (info) => {
-    mainWindow?.webContents.send('update:downloaded', {
-      version: info.version,
-      releaseNotes: info.releaseNotes || ''
-    });
-  });
-
-  autoUpdater.on('download-progress', (progress) => {
-    mainWindow?.webContents.send('update:progress', { percent: progress.percent });
-  });
-
-  autoUpdater.on('error', (err) => {
-    console.error('[auto-updater]', err.message);
-    mainWindow?.webContents.send('update:error', { message: err.message });
-  });
-
-  autoUpdater.checkForUpdatesAndNotify();
-}
-
-ipcMain.handle('update:install', () => {
-  autoUpdater.quitAndInstall();
-});
+// --- Auto Updater (disabled on personal/main) ---
+// Fork is private, no baked GH_TOKEN in the installer, so electron-updater
+// can't reach releases. Keeping setupAutoUpdater + update:install as no-op
+// stubs so call sites (line ~3868, preload.js, renderer.js) keep working.
+function setupAutoUpdater() {}
+ipcMain.handle('update:install', () => {});
 
 ipcMain.handle('app:getVersion', () => {
   return app.getVersion();
