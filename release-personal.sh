@@ -5,7 +5,7 @@ set -e
 # Usage: ./release-personal.sh [personal|patch|minor|major|x.y.z|x.y.z-personal.N]
 # Default: personal (bumps -personal.N suffix)
 #
-# Ships personal builds to the mdrichardson/Claudes fork, never upstream.
+# Ships personal builds to the mdrichardson/Claudes-personal repo, never upstream.
 # This script lives ONLY on the personal/main branch.
 #
 # Version scheme: X.Y.Z-personal.N
@@ -33,7 +33,7 @@ fi
 if ! git remote get-url mdrichardson >/dev/null 2>&1; then
   echo "ERROR: git remote 'mdrichardson' is not configured."
   echo "       Add it with:"
-  echo "         git remote add mdrichardson https://github.com/mdrichardson/Claudes.git"
+  echo "         git remote add mdrichardson https://github.com/mdrichardson/Claudes-personal.git"
   exit 1
 fi
 
@@ -132,15 +132,15 @@ fi
 echo "==> Pushed personal/main and v${VERSION} to mdrichardson"
 
 echo ""
-echo "==> Tag v${VERSION} pushed to mdrichardson/Claudes."
+echo "==> Tag v${VERSION} pushed to mdrichardson/Claudes-personal."
 echo ""
 echo "    To publish the Windows installer to the fork's GitHub Release, run:"
-echo "      npm run dist:win -- -c.publish.owner=mdrichardson -c.publish.repo=Claudes --publish always"
+echo "      npm run dist:win -- -c.publish.owner=mdrichardson -c.publish.repo=Claudes-personal --publish always"
 echo ""
-echo "    (Requires GH_TOKEN env var with write access to mdrichardson/Claudes.)"
+echo "    (Requires GH_TOKEN env var with write access to mdrichardson/Claudes-personal.)"
 echo ""
 echo "    Alternatively, if a release workflow exists on the fork, it will build"
 echo "    automatically when the tag is pushed. Watch:"
-echo "      https://github.com/mdrichardson/Claudes/actions"
+echo "      https://github.com/mdrichardson/Claudes-personal/actions"
 echo ""
-echo "    Release URL: https://github.com/mdrichardson/Claudes/releases/tag/v${VERSION}"
+echo "    Release URL: https://github.com/mdrichardson/Claudes-personal/releases/tag/v${VERSION}"
