@@ -2018,6 +2018,9 @@ function setActiveWorkspace(projectIndex, workspaceId, isStartup) {
   if (typeof window.__renderStickyNotesForActiveProject === 'function') {
     window.__renderStickyNotesForActiveProject();
   }
+  if (typeof window.__repositionStickyNotesForActiveProject === 'function') {
+    window.__repositionStickyNotesForActiveProject();
+  }
 }
 
 function restoreSessions(projectPath, workspaceId) {
