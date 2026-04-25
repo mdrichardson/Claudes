@@ -30,10 +30,10 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 
-if ! git remote get-url mdrichardson >/dev/null 2>&1; then
-  echo "ERROR: git remote 'mdrichardson' is not configured."
+if ! git remote get-url personal-release >/dev/null 2>&1; then
+  echo "ERROR: git remote 'personal-release' is not configured."
   echo "       Add it with:"
-  echo "         git remote add mdrichardson https://github.com/mdrichardson/Claudes-personal.git"
+  echo "         git remote add personal-release https://github.com/mdrichardson/Claudes-personal.git"
   exit 1
 fi
 
@@ -112,24 +112,25 @@ git commit -m "v${VERSION}"
 git tag "v${VERSION}"
 echo "==> Committed and tagged v${VERSION}"
 
-# Push to the mdrichardson fork ONLY. Never origin (paulallington/Claudes).
-if ! git push mdrichardson personal/main; then
+# Push to the personal-release remote ONLY. Never upstream (paulallington/Claudes)
+# and never origin (the public fork at mdrichardson/Claudes — that's for upstream PRs).
+if ! git push personal-release personal/main; then
   echo ""
-  echo "ERROR: push of personal/main to mdrichardson failed."
+  echo "ERROR: push of personal/main to personal-release failed."
   echo "       The commit and tag v${VERSION} are already on your local personal/main."
   echo "       Do NOT re-run this script (it would bump the version AGAIN)."
   echo "       Once the push issue is resolved, run manually:"
-  echo "         git push mdrichardson personal/main"
-  echo "         git push mdrichardson v${VERSION}"
+  echo "         git push personal-release personal/main"
+  echo "         git push personal-release v${VERSION}"
   exit 1
 fi
-if ! git push mdrichardson "v${VERSION}"; then
+if ! git push personal-release "v${VERSION}"; then
   echo ""
   echo "ERROR: tag push failed, but personal/main pushed."
-  echo "       Run manually: git push mdrichardson v${VERSION}"
+  echo "       Run manually: git push personal-release v${VERSION}"
   exit 1
 fi
-echo "==> Pushed personal/main and v${VERSION} to mdrichardson"
+echo "==> Pushed personal/main and v${VERSION} to personal-release"
 
 echo ""
 echo "==> Tag v${VERSION} pushed to mdrichardson/Claudes-personal."
