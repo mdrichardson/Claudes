@@ -931,6 +931,7 @@ function applyLayoutRatios(state, entries, rowHeightByIdx, rowsByIdx) {
         var ratio = rowEntries[entryIdx].widthRatio / sum;
         col.element.style.flex = ratio + ' 1 0';
         col.element.style.width = '';
+        col.lastWidthRatio = ratio;
         entryIdx++;
       } else {
         col.element.style.flex = '1 1 0';
@@ -957,8 +958,10 @@ function applyLayoutRatios(state, entries, rowHeightByIdx, rowsByIdx) {
       var hSum = ratiosForActualRows.reduce(function (s, v) { return s + v; }, 0);
       if (hSum > 0) {
         for (var ri2 = 0; ri2 < state.rows.length; ri2++) {
-          state.rows[ri2].el.style.flex = (ratiosForActualRows[ri2] / hSum) + ' 1 0';
+          var rRatio = ratiosForActualRows[ri2] / hSum;
+          state.rows[ri2].el.style.flex = rRatio + ' 1 0';
           state.rows[ri2].el.style.height = '';
+          state.rows[ri2].lastHeightRatio = rRatio;
         }
       }
     }
@@ -3002,18 +3005,22 @@ function persistSessions(projectKey) {
   // Skip while restore is mid-flight — applyLayoutRatios will persist the correct shape on completion.
   if (state.restoringLayout) return;
 
-  // Skip if the container is hidden (project not active). DOM measurements would all return 0,
-  // causing the defensive `rh = 1` fallback to silently overwrite saved ratios with uniform values.
-  // Background session-sync (lines ~2780/2830/2845) and title-edit (line ~1956) both fire
-  // persistSessions for non-active projects, so this guard is load-bearing, not theoretical.
-  if (state.containerEl && state.containerEl.offsetParent === null) return;
+  // When the container is hidden (project not active), DOM measurements return 0. Use cached
+  // ratios from the row/column objects instead so background session-sync persists still flush.
+  var hidden = !!(state.containerEl && state.containerEl.offsetParent === null);
 
-  // Sum row heights once so we can normalise.
   var rowHeights = [];
   var totalRowHeight = 0;
   for (var r = 0; r < state.rows.length; r++) {
-    var rh = state.rows[r].el.getBoundingClientRect().height;
-    if (!isFinite(rh) || rh <= 0) rh = 1; // defensive
+    var rh;
+    if (hidden) {
+      rh = (typeof state.rows[r].lastHeightRatio === 'number' && state.rows[r].lastHeightRatio > 0)
+        ? state.rows[r].lastHeightRatio
+        : (1 / state.rows.length);
+    } else {
+      rh = state.rows[r].el.getBoundingClientRect().height;
+      if (!isFinite(rh) || rh <= 0) rh = 1; // defensive
+    }
     rowHeights.push(rh);
     totalRowHeight += rh;
   }
@@ -3026,8 +3033,17 @@ function persistSessions(projectKey) {
     var totalColWidth = 0;
     for (var c = 0; c < row.columnIds.length; c++) {
       var col = state.columns.get(row.columnIds[c]);
-      var cw = col ? col.element.getBoundingClientRect().width : 0;
-      if (!isFinite(cw) || cw <= 0) cw = 1;
+      var cw;
+      if (!col) {
+        cw = 0;
+      } else if (hidden) {
+        cw = (typeof col.lastWidthRatio === 'number' && col.lastWidthRatio > 0)
+          ? col.lastWidthRatio
+          : (1 / row.columnIds.length);
+      } else {
+        cw = col.element.getBoundingClientRect().width;
+        if (!isFinite(cw) || cw <= 0) cw = 1;
+      }
       colWidths.push(cw);
       totalColWidth += cw;
     }
@@ -3037,16 +3053,20 @@ function persistSessions(projectKey) {
     for (var c2 = 0; c2 < row.columnIds.length; c2++) {
       var col2 = state.columns.get(row.columnIds[c2]);
       if (!col2 || !col2.sessionId) continue;
+      var widthRatio = colWidths[c2] / totalColWidth;
+      if (!hidden) col2.lastWidthRatio = widthRatio;
       columnsOut.push({
         sessionId: col2.sessionId,
         title: col2.customTitle || null,
-        widthRatio: colWidths[c2] / totalColWidth
+        widthRatio: widthRatio
       });
     }
     if (columnsOut.length === 0) continue;
 
+    var heightRatio = rowHeights[r2] / totalRowHeight;
+    if (!hidden) row.lastHeightRatio = heightRatio;
     rowsOut.push({
-      heightRatio: rowHeights[r2] / totalRowHeight,
+      heightRatio: heightRatio,
       columns: columnsOut
     });
   }
