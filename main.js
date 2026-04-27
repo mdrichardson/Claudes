@@ -1,5 +1,5 @@
 const { app, BrowserWindow, ipcMain, dialog, clipboard, nativeTheme, shell, Tray, Menu, nativeImage, Notification, powerMonitor } = require('electron');
-const { autoUpdater } = require('electron-updater');
+// Auto-updater disabled on personal/main — fork is private, no baked GH token.
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -683,24 +683,157 @@ ipcMain.handle('sessions:getTitle', (event, projectPath, sessionId) => {
   }
 });
 
-// Save/load session state per project (which sessions were open in columns)
-ipcMain.handle('sessions:save', (event, projectPath, sessionData) => {
+// Save/load session state per project.
+//
+// Disk shape (synthesized v2): { version: 2, sessions: [...], rowHeightRatios: [...],
+//   workspaces: { "<ws-id>": { sessions: [...], rowHeightRatios: [...] } } }
+// Each session entry: { sessionId, title, rowIdx, widthRatio }
+// Legacy shapes:
+//   - HEAD-only v2 (pre-workspaces): { version: 2, rows: [{ heightRatio, columns: [...] }] }
+//   - personal/main flat: { sessions: [...], workspaces: { id: { sessions: [...] } } }
+//   - very old: bare array
+// Renderer's persistSessions/restoreSessions handle promotion; main.js just persists the blob atomically
+// (tmp+rename so a partial write can't corrupt multi-workspace state).
+ipcMain.handle('sessions:save', (event, projectPath, blob) => {
   const claudesDir = path.join(projectPath, '.claudes');
   if (!fs.existsSync(claudesDir)) {
     fs.mkdirSync(claudesDir, { recursive: true });
   }
-  const sessionsFile = path.join(claudesDir, 'sessions.json');
-  fs.writeFileSync(sessionsFile, JSON.stringify({ sessions: sessionData }, null, 2), 'utf8');
+  const target = path.join(claudesDir, 'sessions.json');
+  const tmp = target + '.tmp';
+  // Accept either the new blob shape or a bare array (legacy callers).
+  // Spread the input first so top-level fields like `version` and `rowHeightRatios`
+  // round-trip; then overwrite `sessions` and `workspaces` with defensive defaults.
+  const payload = Array.isArray(blob)
+    ? { sessions: blob, workspaces: {} }
+    : {
+        ...((blob && typeof blob === 'object') ? blob : {}),
+        sessions: Array.isArray(blob && blob.sessions) ? blob.sessions : [],
+        workspaces: (blob && blob.workspaces && typeof blob.workspaces === 'object') ? blob.workspaces : {}
+      };
+  fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8');
+  fs.renameSync(tmp, target);
 });
 
 ipcMain.handle('sessions:load', (event, projectPath) => {
   const sessionsFile = path.join(projectPath, '.claudes', 'sessions.json');
   try {
     const data = JSON.parse(fs.readFileSync(sessionsFile, 'utf8'));
-    return data.sessions || [];
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      return {
+        ...data,
+        sessions: Array.isArray(data.sessions) ? data.sessions : [],
+        workspaces: (data.workspaces && typeof data.workspaces === 'object') ? data.workspaces : {}
+      };
+    }
+    return { sessions: [], workspaces: {} };
+  } catch {
+    return { sessions: [], workspaces: {} };
+  }
+});
+
+// --- Sticky Notes Persistence ---
+// Primary: <project>/.claudes/sticky-notes.json (back-compat with pre-workspaces users).
+// Sub-workspace: <project>/.claudes/sticky-notes-<workspaceId>.json — one overlay per workspace.
+// Writes are debounced per-(project, workspace), atomic (tmp + rename), and flushed on quit.
+// Malformed JSON on load is quarantined to sticky-notes.corrupt-<ts>.json so user content isn't silently overwritten.
+//
+// personal-only: workspace awareness added on the personal/main branch so the
+// mdrichardson fork ships a usable build before upstream rebases either
+// feat/workspaces or feat/sticky-notes to absorb the same fix. See
+// docs/superpowers/plans/2026-04-24-sticky-notes-workspace-aware-rebase.md
+// (on feat/workspaces) for the upstream plan.
+
+const STICKY_NOTES_WRITE_DEBOUNCE_MS = 400;
+const pendingStickyNotes = new Map(); // stickyKey -> { projectPath, workspaceId, timer, notes }
+
+function stickyKey(projectPath, workspaceId) {
+  return (workspaceId == null) ? projectPath : (projectPath + '::' + workspaceId);
+}
+
+function stickyNotesFile(projectPath, workspaceId) {
+  const dir = path.join(projectPath, '.claudes');
+  return (workspaceId == null)
+    ? path.join(dir, 'sticky-notes.json')
+    : path.join(dir, 'sticky-notes-' + workspaceId + '.json');
+}
+
+function writeStickyNotesAtomic(projectPath, workspaceId, notes) {
+  const claudesDir = path.join(projectPath, '.claudes');
+  if (!fs.existsSync(claudesDir)) {
+    fs.mkdirSync(claudesDir, { recursive: true });
+  }
+  const target = stickyNotesFile(projectPath, workspaceId);
+  const tmp = target + '.tmp';
+  const payload = JSON.stringify({ notes: Array.isArray(notes) ? notes : [] }, null, 2);
+  fs.writeFileSync(tmp, payload, 'utf8');
+  fs.renameSync(tmp, target);
+}
+
+function scheduleWriteStickyNotes(projectPath, workspaceId, notes) {
+  const key = stickyKey(projectPath, workspaceId);
+  const existing = pendingStickyNotes.get(key);
+  if (existing && existing.timer) {
+    clearTimeout(existing.timer);
+  }
+  const entry = { projectPath, workspaceId, notes, timer: null };
+  entry.timer = setTimeout(() => {
+    pendingStickyNotes.delete(key);
+    try { writeStickyNotesAtomic(projectPath, workspaceId, entry.notes); } catch (err) { console.error('writeStickyNotes failed:', err); }
+  }, STICKY_NOTES_WRITE_DEBOUNCE_MS);
+  pendingStickyNotes.set(key, entry);
+}
+
+function flushPendingStickyNotes() {
+  for (const [, entry] of pendingStickyNotes.entries()) {
+    if (entry.timer) clearTimeout(entry.timer);
+    try { writeStickyNotesAtomic(entry.projectPath, entry.workspaceId, entry.notes); } catch (err) { console.error('writeStickyNotes failed:', err); }
+  }
+  pendingStickyNotes.clear();
+}
+
+ipcMain.handle('sticky-notes:load', (event, projectPath, workspaceId) => {
+  const notesFile = stickyNotesFile(projectPath, workspaceId);
+  if (!fs.existsSync(notesFile)) return [];
+  let raw;
+  try {
+    raw = fs.readFileSync(notesFile, 'utf8');
   } catch {
     return [];
   }
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    try {
+      const corrupt = path.join(projectPath, '.claudes',
+        'sticky-notes' + (workspaceId == null ? '' : '-' + workspaceId) + '.corrupt-' + Date.now() + '.json');
+      fs.renameSync(notesFile, corrupt);
+    } catch (err) {
+      console.error('sticky-notes quarantine failed:', err);
+    }
+    return [];
+  }
+  const notes = Array.isArray(data && data.notes) ? data.notes : [];
+  // Forward-compat defaults for v1 files that lack new keys.
+  return notes.map((n) => {
+    const out = {
+      id: n.id,
+      content: typeof n.content === 'string' ? n.content : '',
+      x: typeof n.x === 'number' ? n.x : 20,
+      y: typeof n.y === 'number' ? n.y : 20,
+      width: typeof n.width === 'number' ? n.width : 240,
+      height: typeof n.height === 'number' ? n.height : 180,
+      color: typeof n.color === 'string' ? n.color : 'yellow',
+      fontSize: typeof n.fontSize === 'number' ? n.fontSize : 15
+    };
+    if (n.anchor && typeof n.anchor === 'object') out.anchor = n.anchor;
+    return out;
+  });
+});
+
+ipcMain.handle('sticky-notes:save', (event, projectPath, workspaceId, notes) => {
+  scheduleWriteStickyNotes(projectPath, workspaceId, notes);
 });
 
 // --- CLAUDE.md Management ---
@@ -1410,41 +1543,12 @@ ipcMain.handle('usage:getAll', async () => {
   return results;
 });
 
-// --- Auto Updater ---
-
-autoUpdater.autoDownload = true;
-autoUpdater.autoInstallOnAppQuit = true;
-
-function setupAutoUpdater() {
-  autoUpdater.on('update-available', (info) => {
-    mainWindow?.webContents.send('update:available', {
-      version: info.version,
-      releaseNotes: info.releaseNotes || ''
-    });
-  });
-
-  autoUpdater.on('update-downloaded', (info) => {
-    mainWindow?.webContents.send('update:downloaded', {
-      version: info.version,
-      releaseNotes: info.releaseNotes || ''
-    });
-  });
-
-  autoUpdater.on('download-progress', (progress) => {
-    mainWindow?.webContents.send('update:progress', { percent: progress.percent });
-  });
-
-  autoUpdater.on('error', (err) => {
-    console.error('[auto-updater]', err.message);
-    mainWindow?.webContents.send('update:error', { message: err.message });
-  });
-
-  autoUpdater.checkForUpdatesAndNotify();
-}
-
-ipcMain.handle('update:install', () => {
-  autoUpdater.quitAndInstall();
-});
+// --- Auto Updater (disabled on personal/main) ---
+// Fork is private, no baked GH_TOKEN in the installer, so electron-updater
+// can't reach releases. Keeping setupAutoUpdater + update:install as no-op
+// stubs so call sites (line ~3868, preload.js, renderer.js) keep working.
+function setupAutoUpdater() {}
+ipcMain.handle('update:install', () => {});
 
 ipcMain.handle('app:getVersion', () => {
   return app.getVersion();
@@ -3836,6 +3940,7 @@ app.on('before-quit', () => {
     }
   }
   flushPendingConfig();
+  flushPendingStickyNotes();
   stopAutomationScheduler();
   if (ptyServerProcess) {
     ptyServerProcess.kill();

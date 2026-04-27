@@ -47,8 +47,15 @@ Can also be run manually: `./release.sh [major|minor|patch|x.y.z]`
 
 ## Project Config
 
-- App config stored in `~/.claudes/projects.json`
-- Per-project session state stored in `<project>/.claudes/sessions.json`
+- App config stored in `~/.claudes/projects.json` (dev: `projects-dev.json` — auto-selected when unpackaged). Each project entry carries:
+  - `name`, `path`, `columnCount`, `poppedOut`, `popoutBounds` (existing)
+  - `workspaces: []` — array of `{ id, name, createdAt }` sub-workspaces (peers to Primary, rendered as indented sub-rows under the project card)
+  - `activeWorkspaceId: null | "<ws id>"` — which workspace the project last routed to; `null` means Primary
+- Per-project session state stored in `<project>/.claudes/sessions.json`, shape:
+  ```json
+  { "sessions": [ ... ], "workspaces": { "<ws id>": { "sessions": [ ... ] } } }
+  ```
+  Primary's columns live in the top-level `sessions` array; each sub-workspace's columns live under `workspaces.<id>.sessions`. Legacy files with just `{ "sessions": [...] }` are read as Primary with an implicit empty `workspaces: {}`; the first save upgrades the shape. Writes are atomic (tmp + rename).
 - Claude sessions detected by scanning `~/.claude/projects/<path-key>/` for `.jsonl` files
 
 <!-- aidp-orchestrator-start -->
