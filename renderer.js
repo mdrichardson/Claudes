@@ -1723,75 +1723,79 @@ function restoreProjectSessions(projectPath, project) {
     // sessions.json with default-flex ratios before applyLayoutRatios runs.
     if (state) state.restoringLayout = true;
 
-    var entries = [];
-    var rowHeightByIdx = {};
+    try {
+      var entries = [];
+      var rowHeightByIdx = {};
 
-    if (saved && saved.version === 2 && Array.isArray(saved.rows)) {
-      for (var r = 0; r < saved.rows.length; r++) {
-        var srow = saved.rows[r] || {};
-        var srowCols = Array.isArray(srow.columns) ? srow.columns : [];
-        if (typeof srow.heightRatio === 'number' && isFinite(srow.heightRatio) && srow.heightRatio > 0) {
-          rowHeightByIdx[r] = srow.heightRatio;
+      if (saved && saved.version === 2 && Array.isArray(saved.rows)) {
+        for (var r = 0; r < saved.rows.length; r++) {
+          var srow = saved.rows[r] || {};
+          var srowCols = Array.isArray(srow.columns) ? srow.columns : [];
+          if (typeof srow.heightRatio === 'number' && isFinite(srow.heightRatio) && srow.heightRatio > 0) {
+            rowHeightByIdx[r] = srow.heightRatio;
+          }
+          for (var c = 0; c < srowCols.length; c++) {
+            var col = srowCols[c] || {};
+            if (!col.sessionId) continue;
+            entries.push({
+              rowIdx: r,
+              sessionId: col.sessionId,
+              title: col.title || null,
+              widthRatio: (typeof col.widthRatio === 'number' && isFinite(col.widthRatio) && col.widthRatio > 0) ? col.widthRatio : null
+            });
+          }
         }
-        for (var c = 0; c < srowCols.length; c++) {
-          var col = srowCols[c] || {};
-          if (!col.sessionId) continue;
+      } else if (Array.isArray(saved) && saved.length > 0) {
+        for (var i = 0; i < saved.length; i++) {
+          var entry = saved[i];
+          var sid = typeof entry === 'string' ? entry : entry && entry.sessionId;
+          if (!sid) continue;
           entries.push({
-            rowIdx: r,
-            sessionId: col.sessionId,
-            title: col.title || null,
-            widthRatio: (typeof col.widthRatio === 'number' && isFinite(col.widthRatio) && col.widthRatio > 0) ? col.widthRatio : null
+            rowIdx: 0,
+            sessionId: sid,
+            title: (typeof entry === 'object' && entry && entry.title) ? entry.title : null,
+            widthRatio: null
           });
         }
       }
-    } else if (Array.isArray(saved) && saved.length > 0) {
-      for (var i = 0; i < saved.length; i++) {
-        var entry = saved[i];
-        var sid = typeof entry === 'string' ? entry : entry && entry.sessionId;
-        if (!sid) continue;
-        entries.push({
-          rowIdx: 0,
-          sessionId: sid,
-          title: (typeof entry === 'object' && entry && entry.title) ? entry.title : null,
-          widthRatio: null
-        });
-      }
-    }
 
-    if (entries.length === 0) {
-      if (state) state.restoringLayout = false;
-      addColumn(spawnArgs.length > 0 ? spawnArgs : null);
+      if (entries.length === 0) {
+        addColumn(spawnArgs.length > 0 ? spawnArgs : null);
+        if (typeof window.__repositionStickyNotesForActiveProject === 'function') {
+          window.__repositionStickyNotesForActiveProject();
+        }
+        return;
+      }
+
+      var rowsByIdx = {};
+      for (var k = 0; k < entries.length; k++) {
+        var e = entries[k];
+        var targetRow = rowsByIdx[e.rowIdx];
+        if (!targetRow) {
+          while (state.rows.length <= e.rowIdx) {
+            var newRow = addRowToProject(state);
+            rowsByIdx[state.rows.length - 1] = newRow;
+          }
+          targetRow = rowsByIdx[e.rowIdx];
+        }
+        addColumn(spawnArgs.concat(['--resume', e.sessionId]), targetRow, e.title ? { title: e.title } : {});
+      }
+
+      for (var rr = state.rows.length - 1; rr >= 0; rr--) {
+        removeRowIfEmpty(state, state.rows[rr]);
+      }
+
+      applyLayoutRatios(state, entries, rowHeightByIdx, rowsByIdx);
+
       if (typeof window.__repositionStickyNotesForActiveProject === 'function') {
         window.__repositionStickyNotesForActiveProject();
       }
-      return;
-    }
-
-    var rowsByIdx = {};
-    for (var k = 0; k < entries.length; k++) {
-      var e = entries[k];
-      var targetRow = rowsByIdx[e.rowIdx];
-      if (!targetRow) {
-        while (state.rows.length <= e.rowIdx) {
-          var newRow = addRowToProject(state);
-          rowsByIdx[state.rows.length - 1] = newRow;
-        }
-        targetRow = rowsByIdx[e.rowIdx];
-      }
-      addColumn(spawnArgs.concat(['--resume', e.sessionId]), targetRow, e.title ? { title: e.title } : {});
-    }
-
-    for (var rr = state.rows.length - 1; rr >= 0; rr--) {
-      removeRowIfEmpty(state, state.rows[rr]);
-    }
-
-    applyLayoutRatios(state, entries, rowHeightByIdx, rowsByIdx);
-
-    if (state) state.restoringLayout = false;
-    persistSessions(projectPath);
-
-    if (typeof window.__repositionStickyNotesForActiveProject === 'function') {
-      window.__repositionStickyNotesForActiveProject();
+    } finally {
+      // Always clear the flag — even if a synchronous call above threw — so background
+      // persists are not silently disabled for the rest of the session. persistSessions
+      // runs after the reset so the canonicalising write actually happens.
+      if (state) state.restoringLayout = false;
+      persistSessions(projectPath);
     }
   });
 }
