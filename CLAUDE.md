@@ -50,3 +50,55 @@ Can also be run manually: `./release.sh [major|minor|patch|x.y.z]`
 - App config stored in `~/.claudes/projects.json`
 - Per-project session state stored in `<project>/.claudes/sessions.json`
 - Claude sessions detected by scanning `~/.claude/projects/<path-key>/` for `.jsonl` files
+
+<!-- aidp-orchestrator-start -->
+## AI-Driven Project Orchestrator
+
+**Session agent active** — read `_aidp-orchestrator.md` from project memory for project-specific config (shadow dir, verify commands, docs).
+
+### Assigned Agents
+| Agent | Scope | Model |
+|-------|-------|-------|
+| implementer-electron | main.js, renderer.js, preload.js, pty-server.js, index.html, styles.css, scripts/, release.sh, package.json | sonnet |
+| tester-node | test/ | sonnet |
+| ux-reviewer | index.html, styles.css, renderer.js | sonnet |
+| reviewer | (read-only) | opus |
+
+### Workflow (mandatory for ALL implementation)
+1. **Classify** — trivial (skip to 4) | standard | vague/complex (`EnterPlanMode`)
+2. **Research** — Explore agent(s) to understand affected areas
+3. **Plan** — decompose into agent-scoped subtasks
+4. **Sync main and branch** — `git checkout main && git pull --ff-only` (skip pull if no remote; on divergence, escalate — do NOT auto-merge/rebase) then `git checkout -b work/<task-description>`
+5. **Create and enter worktree** — `git worktree add -b worktree-<task-slug> .claude/worktrees/<task-slug>` then `EnterWorktree(path: ".claude/worktrees/<task-slug>")` (use `worktree add` so the branch is based on local HEAD, not origin/<default>)
+6. **Delegate** — Agent() calls WITHOUT `isolation` (agents inherit worktree CWD). Prompts MUST include `## Constitution Rules` and `## Structure Snippet` sections (paste from session-cached docs) so agents can skip their own file reads. Add `## Design Snippet` when delegating to ui-compose/ux-reviewer.
+implementer-electron + tester-node + ux-reviewer can run in parallel. Merge ALL before delegating tester.
+7. **Commit** — after ALL agents return: `git add` + `git commit`
+8. **Quality gate** — `npm test`. ALL must pass (zero errors, including pre-existing). 3 failures → escalate
+9. **Review** — reviewer agent on `git diff main...HEAD`. Review-fix loop: Critical → fix → re-commit → re-gate → re-review (max 2 cycles)
+10. **Exit worktree** — `ExitWorktree(action: "keep")`
+11. **Merge and ship** — merge worktree → integration branch → main. Conflict check at each merge, verify after each, revert main on failure. Worktree cleanup (unlock + remove + branch -d) then integration branch cleanup. See Merge Protocol in `_aidp-orchestrator.md`
+12. **Escalate** — user only for architectural decisions or merge conflicts
+
+### Enforcement (hooks auto-enforce — these WILL block you)
+- Agent() calls blocked without active worktree (except Explore, Plan, reviewer, plan-reviewer)
+- Write/Edit blocked on subdirectory files without active worktree
+- Bash file writes blocked without active worktree
+- Branch must be main/master/work/* before worktree creation
+- Plan review offered via AskUserQuestion before ExitPlanMode (user chooses: finalize or review first)
+- ExitWorktree blocked until reviewer has run (commit-hash verified — new commits require re-review)
+- ExitWorktree blocked until ALL verify commands pass (zero errors — pre-existing included)
+
+### Direct-Edit Scope (orchestrator only, no worktree needed)
+Root config: CLAUDE.md, README.md, .gitignore, package.json | .claude/ | memory/ | git ops
+
+**All other files: Branch → EnterWorktree → Delegate → Commit → Gate → Review → ExitWorktree**
+Every source file change — including one-line fixes — goes through an agent in a worktree.
+
+### Agent Lifecycle
+Agents are one-shot. Always spawn fresh Agent() for remaining work. No `isolation` param — agents inherit worktree CWD.
+
+### Task Tracking
+Emit `TaskCreate` at step 3 (Plan), one per phase: Implement (one per parallel agent), Quality gate, Review, Merge. Use `addBlockedBy` for ordering. Update to `in_progress` when entering each step, `completed` on pass. Never `completed` while tests fail or reviewer flagged Critical. Orchestrator owns tasks — agents don't touch them. Skip for orchestrator-direct edits.
+
+**Before your first task each session**, read `_aidp-orchestrator.md` from project memory — it is the authoritative workflow source and may be more current than these inline rules.
+<!-- aidp-orchestrator-end -->
