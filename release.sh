@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 set -e
 
-# Release script for Claudes
-# Usage: ./release.sh [major|minor|patch|x.y.z]
-# Default: patch
+# Release script for Claudes (single fork — mdrichardson/Claudes)
+# Usage: ./release.sh [personal|patch|minor|major|x.y.z|x.y.z-personal.N]
+# Default: personal (bumps the -personal.N suffix)
 #
-# Bumps the version, commits, tags, and pushes to origin (mdrichardson/Claudes).
-# GitHub Actions then builds the Windows + macOS installers and creates the release.
+# Version scheme: X.Y.Z-personal.N
+#   - Avoids colliding with upstream paulallington/Claudes tags
+#   - `personal` bumps N (or starts at .1 if missing)
+#   - `patch|minor|major` strip the suffix, bump the numeric part, reset to -personal.1
+#   - Explicit X.Y.Z or X.Y.Z-personal.N is used as-is
+#
+# Pushes the master branch and the new tag to origin.
+# GitHub Actions builds the Windows + macOS installers and creates the Release.
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 if [ "$BRANCH" != "master" ]; then
@@ -28,22 +34,44 @@ if ! git remote get-url origin >/dev/null 2>&1; then
 fi
 
 CURRENT=$(node -p "require('./package.json').version")
-if ! echo "$CURRENT" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-  echo "ERROR: current package.json version '${CURRENT}' is not plain semver X.Y.Z."
+ARG="${1:-personal}"
+
+# Split CURRENT into BASE (X.Y.Z) and PERSONAL_N (integer or empty).
+if echo "$CURRENT" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+-personal\.[0-9]+$'; then
+  BASE="${CURRENT%-personal.*}"
+  PERSONAL_N="${CURRENT##*-personal.}"
+elif echo "$CURRENT" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+  BASE="$CURRENT"
+  PERSONAL_N=""
+else
+  echo "ERROR: current package.json version '${CURRENT}' is not of the form X.Y.Z or X.Y.Z-personal.N"
   exit 1
 fi
-IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
 
-ARG="${1:-patch}"
+IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE"
+
 case "$ARG" in
-  major) VERSION="$((MAJOR + 1)).0.0" ;;
-  minor) VERSION="${MAJOR}.$((MINOR + 1)).0" ;;
-  patch) VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+  personal)
+    if [ -z "$PERSONAL_N" ]; then
+      VERSION="${BASE}-personal.1"
+    else
+      VERSION="${BASE}-personal.$((PERSONAL_N + 1))"
+    fi
+    ;;
+  major)
+    VERSION="$((MAJOR + 1)).0.0-personal.1"
+    ;;
+  minor)
+    VERSION="${MAJOR}.$((MINOR + 1)).0-personal.1"
+    ;;
+  patch)
+    VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))-personal.1"
+    ;;
   *)
-    if echo "$ARG" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+    if echo "$ARG" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-personal\.[0-9]+)?$'; then
       VERSION="$ARG"
     else
-      echo "Usage: ./release.sh [major|minor|patch|x.y.z]"
+      echo "Usage: ./release.sh [personal|patch|minor|major|x.y.z|x.y.z-personal.N]"
       echo "Current version: ${CURRENT}"
       exit 1
     fi
@@ -59,6 +87,7 @@ if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
   exit 1
 fi
 
+# Update version in package.json (preserves trailing newline).
 node -e "
   const pkg = require('./package.json');
   pkg.version = '${VERSION}';
