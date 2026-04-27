@@ -685,10 +685,14 @@ ipcMain.handle('sessions:getTitle', (event, projectPath, sessionId) => {
 
 // Save/load session state per project.
 //
-// Disk shape (current): { sessions: [...], workspaces: { "<ws-id>": { sessions: [...] } } }
-// Legacy shape:          { sessions: [...] }  — loaded as blob.sessions with workspaces:{}.
-//
-// The renderer drives the full blob — this handler just persists it atomically
+// Disk shape (synthesized v2): { version: 2, sessions: [...], rowHeightRatios: [...],
+//   workspaces: { "<ws-id>": { sessions: [...], rowHeightRatios: [...] } } }
+// Each session entry: { sessionId, title, rowIdx, widthRatio }
+// Legacy shapes:
+//   - HEAD-only v2 (pre-workspaces): { version: 2, rows: [{ heightRatio, columns: [...] }] }
+//   - personal/main flat: { sessions: [...], workspaces: { id: { sessions: [...] } } }
+//   - very old: bare array
+// Renderer's persistSessions/restoreSessions handle promotion; main.js just persists the blob atomically
 // (tmp+rename so a partial write can't corrupt multi-workspace state).
 ipcMain.handle('sessions:save', (event, projectPath, blob) => {
   const claudesDir = path.join(projectPath, '.claudes');
@@ -698,9 +702,12 @@ ipcMain.handle('sessions:save', (event, projectPath, blob) => {
   const target = path.join(claudesDir, 'sessions.json');
   const tmp = target + '.tmp';
   // Accept either the new blob shape or a bare array (legacy callers).
+  // Spread the input first so top-level fields like `version` and `rowHeightRatios`
+  // round-trip; then overwrite `sessions` and `workspaces` with defensive defaults.
   const payload = Array.isArray(blob)
     ? { sessions: blob, workspaces: {} }
     : {
+        ...((blob && typeof blob === 'object') ? blob : {}),
         sessions: Array.isArray(blob && blob.sessions) ? blob.sessions : [],
         workspaces: (blob && blob.workspaces && typeof blob.workspaces === 'object') ? blob.workspaces : {}
       };
@@ -712,10 +719,14 @@ ipcMain.handle('sessions:load', (event, projectPath) => {
   const sessionsFile = path.join(projectPath, '.claudes', 'sessions.json');
   try {
     const data = JSON.parse(fs.readFileSync(sessionsFile, 'utf8'));
-    return {
-      sessions: Array.isArray(data && data.sessions) ? data.sessions : [],
-      workspaces: (data && data.workspaces && typeof data.workspaces === 'object') ? data.workspaces : {}
-    };
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      return {
+        ...data,
+        sessions: Array.isArray(data.sessions) ? data.sessions : [],
+        workspaces: (data.workspaces && typeof data.workspaces === 'object') ? data.workspaces : {}
+      };
+    }
+    return { sessions: [], workspaces: {} };
   } catch {
     return { sessions: [], workspaces: {} };
   }
