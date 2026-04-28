@@ -3842,6 +3842,7 @@ function toggleMaximizeColumn(id) {
     setFocusedColumn(id);
   }
   refitAll();
+  window.__stickyNotesApplyMaximizeVisibility?.();
 }
 
 // ============================================================
@@ -10679,6 +10680,44 @@ document.getElementById('btn-automation-copy-output').addEventListener('click', 
     }
   }
 
+  // Resolve the column id a note's anchor targets in the given state, or null
+  // if the anchor doesn't resolve to a live column (container-anchored, missing
+  // row/column, or unknown anchor type).
+  function resolveAnchorColId(note, state) {
+    if (!note || !note.anchor || !state || !state.rows) return null;
+    var a = note.anchor;
+    if (a.type !== 'column') return null;
+    var row = state.rows[a.rowIdx];
+    if (!row || !row.columnIds) return null;
+    var colId = row.columnIds[a.colIdx];
+    return (typeof colId === 'undefined') ? null : colId;
+  }
+
+  // While a column is maximized, hide every sticky note whose anchor doesn't
+  // resolve to that column. On restore (maximizedColumnId === null), unhide
+  // every note.
+  function applyMaximizeVisibility() {
+    var projectKey = currentProjectKey();
+    if (!projectKey) return;
+    var notes = getNotes(projectKey);
+    var state = typeof getActiveState === 'function' ? getActiveState() : null;
+    for (var i = 0; i < notes.length; i++) {
+      var note = notes[i];
+      var el = container.querySelector('.sticky-note[data-note-id="' + note.id + '"]');
+      if (!el) continue;
+      if (maximizedColumnId === null) {
+        el.classList.remove('sticky-note--hidden-by-maximize');
+      } else {
+        var colId = resolveAnchorColId(note, state);
+        if (colId === maximizedColumnId) {
+          el.classList.remove('sticky-note--hidden-by-maximize');
+        } else {
+          el.classList.add('sticky-note--hidden-by-maximize');
+        }
+      }
+    }
+  }
+
   function renderForActiveProject() {
     while (container.firstChild) container.removeChild(container.firstChild);
     openPopoverNoteId = null;
@@ -10696,6 +10735,7 @@ document.getElementById('btn-automation-copy-output').addEventListener('click', 
         var el = createNoteElement(notes[i]);
         container.appendChild(el);
       }
+      applyMaximizeVisibility();
     });
   }
 
@@ -10716,6 +10756,7 @@ document.getElementById('btn-automation-copy-output').addEventListener('click', 
       els[i].style.left = pos.x + 'px';
       els[i].style.top = pos.y + 'px';
     }
+    applyMaximizeVisibility();
   }
 
   function createNewNote() {
@@ -10785,6 +10826,7 @@ document.getElementById('btn-automation-copy-output').addEventListener('click', 
       el.style.left = note.x + 'px';
       el.style.top = note.y + 'px';
       save(projectKey);
+      applyMaximizeVisibility();
     });
   }
 
@@ -10803,6 +10845,7 @@ document.getElementById('btn-automation-copy-output').addEventListener('click', 
   // Expose the render hook so setActiveProject can call it.
   window.__renderStickyNotesForActiveProject = renderForActiveProject;
   window.__repositionStickyNotesForActiveProject = repositionStickyNotesForActiveProject;
+  window.__stickyNotesApplyMaximizeVisibility = applyMaximizeVisibility;
 
   // Initial render in case setActiveProject already fired before this IIFE executed.
   renderForActiveProject();
