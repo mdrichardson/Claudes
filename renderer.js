@@ -2474,6 +2474,15 @@ function createColumnHeader(id, customTitle, opts) {
   header.appendChild(title);
   header.appendChild(actions);
 
+  if (!popoutMode && !opts.isDiff) {
+    header.addEventListener('contextmenu', function (e) {
+      if (header.querySelector('[contenteditable="true"]')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      showColumnContextMenu(id, e.clientX, e.clientY);
+    });
+  }
+
   header.addEventListener('dblclick', function (e) {
     if (e.target === title || title.contains(e.target)) return;
     toggleMaximizeColumn(id);
@@ -2482,6 +2491,101 @@ function createColumnHeader(id, customTitle, opts) {
   if (!opts.isDiff) setupColumnDrag(header, id);
 
   return header;
+}
+
+var columnContextMenuDocClick = null;
+
+function showColumnContextMenu(colId, x, y) {
+  var col = allColumns.get(colId);
+  if (!col) return;
+  var project = config.projects.find(function (p) { return p.path === col.projectKey; });
+  if (!project) return;
+
+  var candidates = [];
+  if (col.workspaceId !== null) candidates.push({ wsId: null, label: 'Primary' });
+  (project.workspaces || []).forEach(function (ws) {
+    if (ws.id !== col.workspaceId) candidates.push({ wsId: ws.id, label: ws.name });
+  });
+
+  // Tear down any prior column context menu/submenu before opening a new one.
+  if (columnContextMenuDocClick) {
+    document.removeEventListener('click', columnContextMenuDocClick);
+    columnContextMenuDocClick = null;
+  }
+  var prior = document.getElementById('column-context-menu');
+  if (prior) prior.remove();
+  var priorSub = document.getElementById('column-context-submenu');
+  if (priorSub) priorSub.remove();
+
+  var menu = document.createElement('div');
+  menu.id = 'column-context-menu';
+  menu.className = 'project-context-menu';
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  menu.style.display = 'block';
+
+  var parentItem = document.createElement('div');
+  parentItem.className = 'project-context-item has-submenu';
+  parentItem.textContent = 'Send to workspace';
+  if (candidates.length === 0) parentItem.classList.add('disabled');
+  menu.appendChild(parentItem);
+
+  function closeAll() {
+    var m = document.getElementById('column-context-menu');
+    if (m) m.remove();
+    var s = document.getElementById('column-context-submenu');
+    if (s) s.remove();
+    if (columnContextMenuDocClick) {
+      document.removeEventListener('click', columnContextMenuDocClick);
+      columnContextMenuDocClick = null;
+    }
+  }
+
+  function openSubmenu() {
+    if (candidates.length === 0) return;
+    if (document.getElementById('column-context-submenu')) return;
+    var sub = document.createElement('div');
+    sub.id = 'column-context-submenu';
+    sub.className = 'project-context-menu column-context-submenu';
+    var rect = parentItem.getBoundingClientRect();
+    sub.style.left = rect.right + 'px';
+    sub.style.top = rect.top + 'px';
+    sub.style.display = 'block';
+    candidates.forEach(function (cand) {
+      var item = document.createElement('div');
+      item.className = 'project-context-item';
+      item.textContent = cand.label;
+      item.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        closeAll();
+        migrateColumnToWorkspace(colId, cand.wsId);
+      });
+      sub.appendChild(item);
+    });
+    document.body.appendChild(sub);
+  }
+
+  parentItem.addEventListener('mouseenter', openSubmenu);
+  parentItem.addEventListener('click', function (e) {
+    e.stopPropagation();
+    openSubmenu();
+  });
+
+  document.body.appendChild(menu);
+
+  // Defer outside-click teardown by one tick so the originating right-click
+  // doesn't immediately fire it.
+  setTimeout(function () {
+    function onDocClick(ev) {
+      var m = document.getElementById('column-context-menu');
+      var s = document.getElementById('column-context-submenu');
+      if (m && m.contains(ev.target)) return;
+      if (s && s.contains(ev.target)) return;
+      closeAll();
+    }
+    columnContextMenuDocClick = onDocClick;
+    document.addEventListener('click', onDocClick);
+  }, 0);
 }
 
 // Shared contenteditable inline-rename helper. Used by column title, project
@@ -3673,6 +3777,87 @@ function removeColumn(id) {
   updateSidebarActivity();
 }
 
+function migrateColumnToWorkspace(colId, targetWsId) {
+  if (popoutMode) return;
+  var col = allColumns.get(colId);
+  if (!col) return;
+  var sourceWsId = col.workspaceId;
+  if (sourceWsId === targetWsId) return;
+
+  var projIdx = config.projects.findIndex(function (p) { return p.path === col.projectKey; });
+  if (projIdx < 0) return;
+
+  if (targetWsId !== null
+      && !config.projects[projIdx].workspaces.some(function (w) { return w.id === targetWsId; })) {
+    return;
+  }
+
+  if (maximizedColumnId === colId) {
+    toggleMaximizeColumn(colId);
+  }
+
+  var srcState = projectStates.get(stateKey(col.projectKey, sourceWsId));
+  var srcRow = srcState ? findRowForColumn(srcState, colId) : null;
+  if (!srcState || !srcRow) return;
+
+  var targetState = getOrCreateProjectState(stateKey(col.projectKey, targetWsId));
+  if (targetState.restoringLayout) return;
+
+  var prev = col.element.previousElementSibling;
+  var next = col.element.nextElementSibling;
+  col.element.remove();
+  if (prev && prev.classList.contains('resize-handle')) prev.remove();
+  else if (next && next.classList.contains('resize-handle')) next.remove();
+
+  srcState.columns.delete(colId);
+  var srcIdx = srcRow.columnIds.indexOf(colId);
+  if (srcIdx >= 0) srcRow.columnIds.splice(srcIdx, 1);
+  srcRow.columnIds.forEach(function (rid) {
+    var rcol = srcState.columns.get(rid);
+    if (rcol && rcol.element) { rcol.element.style.flex = ''; rcol.element.style.width = ''; }
+  });
+  removeRowIfEmpty(srcState, srcRow);
+  if (srcState.focusedColumnId === colId) srcState.focusedColumnId = null;
+
+  var targetRow = (targetState.rows.length > 0)
+    ? targetState.rows[targetState.rows.length - 1]
+    : addRowToProject(targetState);
+
+  if (targetRow.columnIds.length > 0) {
+    var leftId = targetRow.columnIds[targetRow.columnIds.length - 1];
+    var handle = document.createElement('div');
+    handle.className = 'resize-handle';
+    handle.dataset.leftColumnId = String(leftId);
+    handle.dataset.rightColumnId = String(colId);
+    targetRow.el.appendChild(handle);
+    setupResizeHandle(handle);
+  }
+  targetRow.el.appendChild(col.element);
+
+  targetRow.columnIds.forEach(function (rid) {
+    var rcol = targetState.columns.get(rid);
+    if (rcol && rcol.element) { rcol.element.style.flex = ''; rcol.element.style.width = ''; }
+  });
+  col.element.style.flex = '';
+  col.element.style.width = '';
+
+  col.workspaceId = targetWsId;
+  targetState.columns.set(colId, col);
+  targetRow.columnIds.push(colId);
+
+  persistSessions(col.projectKey, sourceWsId);
+  persistSessions(col.projectKey, targetWsId);
+
+  setActiveWorkspace(projIdx, targetWsId, false);
+  refitAll();
+  setFocusedColumn(colId);
+
+  col.element.classList.add('migrated-flash');
+  setTimeout(function () { col.element.classList.remove('migrated-flash'); }, 1500);
+
+  saveColumnCounts();
+}
+
 function restartColumn(id) {
   var col = allColumns.get(id);
   if (!col) return;
@@ -3791,7 +3976,7 @@ var maximizedColumnId = null;
 function toggleMaximizeColumn(id) {
   var col = allColumns.get(id);
   if (!col) return;
-  var state = projectStates.get(col.projectKey);
+  var state = projectStates.get(stateKey(col.projectKey, col.workspaceId));
   if (!state) return;
 
   if (maximizedColumnId === id) {
