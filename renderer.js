@@ -2493,6 +2493,8 @@ function createColumnHeader(id, customTitle, opts) {
   return header;
 }
 
+var columnContextMenuDocClick = null;
+
 function showColumnContextMenu(colId, x, y) {
   var col = allColumns.get(colId);
   if (!col) return;
@@ -2506,6 +2508,10 @@ function showColumnContextMenu(colId, x, y) {
   });
 
   // Tear down any prior column context menu/submenu before opening a new one.
+  if (columnContextMenuDocClick) {
+    document.removeEventListener('click', columnContextMenuDocClick);
+    columnContextMenuDocClick = null;
+  }
   var prior = document.getElementById('column-context-menu');
   if (prior) prior.remove();
   var priorSub = document.getElementById('column-context-submenu');
@@ -2529,6 +2535,10 @@ function showColumnContextMenu(colId, x, y) {
     if (m) m.remove();
     var s = document.getElementById('column-context-submenu');
     if (s) s.remove();
+    if (columnContextMenuDocClick) {
+      document.removeEventListener('click', columnContextMenuDocClick);
+      columnContextMenuDocClick = null;
+    }
   }
 
   function openSubmenu() {
@@ -2566,14 +2576,15 @@ function showColumnContextMenu(colId, x, y) {
   // Defer outside-click teardown by one tick so the originating right-click
   // doesn't immediately fire it.
   setTimeout(function () {
-    document.addEventListener('click', function onDocClick(ev) {
+    function onDocClick(ev) {
       var m = document.getElementById('column-context-menu');
       var s = document.getElementById('column-context-submenu');
       if (m && m.contains(ev.target)) return;
       if (s && s.contains(ev.target)) return;
       closeAll();
-      document.removeEventListener('click', onDocClick);
-    });
+    }
+    columnContextMenuDocClick = onDocClick;
+    document.addEventListener('click', onDocClick);
   }, 0);
 }
 
@@ -3789,6 +3800,9 @@ function migrateColumnToWorkspace(colId, targetWsId) {
   var srcRow = srcState ? findRowForColumn(srcState, colId) : null;
   if (!srcState || !srcRow) return;
 
+  var targetState = getOrCreateProjectState(stateKey(col.projectKey, targetWsId));
+  if (targetState.restoringLayout) return;
+
   var prev = col.element.previousElementSibling;
   var next = col.element.nextElementSibling;
   col.element.remove();
@@ -3805,8 +3819,6 @@ function migrateColumnToWorkspace(colId, targetWsId) {
   removeRowIfEmpty(srcState, srcRow);
   if (srcState.focusedColumnId === colId) srcState.focusedColumnId = null;
 
-  var targetState = getOrCreateProjectState(stateKey(col.projectKey, targetWsId));
-  if (targetState.restoringLayout) return;
   var targetRow = (targetState.rows.length > 0)
     ? targetState.rows[targetState.rows.length - 1]
     : addRowToProject(targetState);
