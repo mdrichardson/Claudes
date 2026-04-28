@@ -5652,6 +5652,9 @@ body.mode-popout #btn-add-project {
   box-sizing: border-box;
 }
 
+/* display:none also removes the note from layout and pointer hit-testing — no pointer-events rule needed. */
+.sticky-note.sticky-note--hidden-by-maximize { display: none !important; }
+
 .sticky-note-header {
   height: 22px;
   flex: 0 0 22px;
