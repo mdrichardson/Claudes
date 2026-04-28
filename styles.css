@@ -1932,7 +1932,8 @@ html, body {
   color: var(--text-primary);
 }
 
-.file-tree-context-menu {
+/* Shared base — both menus use these. */
+.context-menu {
   position: fixed;
   z-index: 10000;
   background: var(--bg-secondary);
@@ -1943,15 +1944,33 @@ html, body {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 
-.file-tree-context-item {
+.context-item {
   padding: 6px 12px;
   font-size: 12px;
   color: var(--text-primary);
   cursor: pointer;
 }
 
-.file-tree-context-item:hover {
+.context-item:hover:not(.disabled) {
   background: var(--accent-color);
+}
+
+.context-item.disabled {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+/* Menu-specific tweaks (only what differs from the base). */
+.recent-commands-menu {
+  min-width: 240px;
+  max-width: 400px;
+}
+
+.recent-commands-menu .context-item {
+  font-family: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Git Changes */

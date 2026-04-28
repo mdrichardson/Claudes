@@ -2871,22 +2871,43 @@ function addColumn(args, targetRow, opts) {
         c.notified = false;
       }
     }
+    // Recent-commands buffer. Note: terminal.paste() re-fires onData (xterm v6
+    // routes paste through the data pipeline), so re-entry here is intentional —
+    // dedupe-on-commit prevents history duplicates.
+    if (!c) return;
+    var inEscape = false;
+    for (var i = 0; i < data.length; i++) {
+      var ch = data.charAt(i);
+      if (inEscape) {
+        if (/[A-Za-z~]/.test(ch)) inEscape = false;
+        continue;
+      }
+      if (ch === '\x1b') { inEscape = true; continue; }
+      if (ch === '\r' || ch === '\n') {
+        var cmd = c.commandBuffer.trim();
+        c.commandBuffer = '';
+        if (!cmd) continue;
+        var existingIdx = c.recentCommands.indexOf(cmd);
+        if (existingIdx !== -1) c.recentCommands.splice(existingIdx, 1);
+        c.recentCommands.push(cmd);
+        while (c.recentCommands.length > 5) c.recentCommands.shift();
+        continue;
+      }
+      if (ch === '\x7f' || ch === '\b') {
+        c.commandBuffer = c.commandBuffer.slice(0, -1);
+        continue;
+      }
+      if (ch === '\x03' || ch === '\x15') {
+        c.commandBuffer = '';
+        continue;
+      }
+      c.commandBuffer += ch;
+    }
   });
 
   termWrapper.addEventListener('contextmenu', function (e) {
     e.preventDefault();
-    var sel = terminal.getSelection();
-    if (sel) {
-      window.electronAPI.clipboardWriteText(sel);
-      terminal.clearSelection();
-    } else {
-      window.electronAPI.clipboardReadText().then(function (text) {
-        if (text) {
-          terminal.focus();
-          terminal.paste(text);
-        }
-      });
-    }
+    showRecentCommandsMenu(id, e.clientX, e.clientY);
   });
 
   termWrapper.addEventListener('mousedown', function () {
@@ -2934,7 +2955,9 @@ function addColumn(args, targetRow, opts) {
     createdAt: Date.now(),
     lastInputAt: 0,
     hasUserInput: false,
-    notified: false
+    notified: false,
+    recentCommands: [],
+    commandBuffer: ''
   };
 
   row.columnIds.push(id);
@@ -4574,35 +4597,113 @@ function toggleExplorer() {
 // File Tree
 // ============================================================
 
-function showFileTreeContextMenu(e, entry) {
-  var existing = document.querySelector('.file-tree-context-menu');
-  if (existing) existing.remove();
+var activeContextMenu = null;
+
+function showContextMenu(items, x, y, opts) {
+  if (activeContextMenu) activeContextMenu.close();
 
   var menu = document.createElement('div');
-  menu.className = 'file-tree-context-menu';
-  menu.style.left = e.clientX + 'px';
-  menu.style.top = e.clientY + 'px';
+  menu.className = 'context-menu' + (opts && opts.className ? ' ' + opts.className : '');
+  menu.style.visibility = 'hidden';
 
-  var showInExplorer = document.createElement('div');
-  showInExplorer.className = 'file-tree-context-item';
-  showInExplorer.textContent = 'See in Explorer';
-  showInExplorer.addEventListener('click', function () {
-    window.electronAPI.showItemInFolder(entry.path);
-    menu.remove();
-  });
-  menu.appendChild(showInExplorer);
+  for (var i = 0; i < items.length; i++) {
+    (function (item) {
+      var el = document.createElement('div');
+      el.className = 'context-item' + (item.disabled ? ' disabled' : '');
+      el.textContent = item.label;
+      if (item.title) el.title = item.title;
+      if (!item.disabled && item.onClick) {
+        el.addEventListener('click', function () {
+          item.onClick();
+          close();
+        });
+      }
+      menu.appendChild(el);
+    })(items[i]);
+  }
 
   document.body.appendChild(menu);
 
-  function closeMenu(ev) {
-    if (!menu.contains(ev.target)) {
-      menu.remove();
-      document.removeEventListener('mousedown', closeMenu);
+  var rect = menu.getBoundingClientRect();
+  var left = (x + rect.width > window.innerWidth) ? Math.max(0, x - rect.width) : x;
+  var top = (y + rect.height > window.innerHeight) ? Math.max(0, y - rect.height) : y;
+  menu.style.left = left + 'px';
+  menu.style.top = top + 'px';
+  menu.style.visibility = '';
+
+  var handlers = [];
+  function on(target, type, fn, options) {
+    target.addEventListener(type, fn, options);
+    handlers.push({ target: target, type: type, fn: fn, options: options });
+  }
+  function close() {
+    if (activeContextMenu !== state) return;
+    for (var j = 0; j < handlers.length; j++) {
+      var h = handlers[j];
+      h.target.removeEventListener(h.type, h.fn, h.options);
+    }
+    if (menu.parentNode) menu.parentNode.removeChild(menu);
+    activeContextMenu = null;
+  }
+
+  function onMouseDown(e) { if (!menu.contains(e.target)) close(); }
+  function onKey(e) { if (e.key === 'Escape') close(); }
+  function onBlur() { close(); }
+  function onScroll() { close(); }
+
+  setTimeout(function () {
+    if (activeContextMenu !== state) return;
+    on(document, 'mousedown', onMouseDown, true);
+  }, 0);
+  on(document, 'keydown', onKey, true);
+  on(window, 'blur', onBlur);
+  on(menu, 'wheel', onScroll, { passive: true });
+  if (opts && opts.anchorEl) on(opts.anchorEl, 'scroll', onScroll, true);
+
+  var state = { el: menu, close: close };
+  activeContextMenu = state;
+  return state;
+}
+
+function showFileTreeContextMenu(e, entry) {
+  showContextMenu(
+    [{ label: 'See in Explorer', onClick: function () { window.electronAPI.showItemInFolder(entry.path); } }],
+    e.clientX, e.clientY,
+    { className: 'file-tree-context-menu' }
+  );
+}
+
+function showRecentCommandsMenu(id, x, y) {
+  var colData = allColumns.get(id);
+  if (!colData || !colData.terminal) return;
+
+  var items;
+  if (!colData.recentCommands || colData.recentCommands.length === 0) {
+    items = [{ label: 'No recent commands', disabled: true }];
+  } else {
+    items = [];
+    for (var i = 0; i < colData.recentCommands.length; i++) {
+      (function (cmd) {
+        items.push({
+          label: cmd,
+          title: cmd,
+          onClick: function () { pasteCommand(id, cmd); }
+        });
+      })(colData.recentCommands[i]);
     }
   }
-  setTimeout(function () {
-    document.addEventListener('mousedown', closeMenu);
-  }, 0);
+  showContextMenu(items, x, y, { className: 'recent-commands-menu', anchorEl: colData.element });
+}
+
+function pasteCommand(id, cmd) {
+  var colData = allColumns.get(id);
+  if (!colData || !colData.terminal) return;
+  try {
+    colData.terminal.focus();
+    colData.terminal.paste(cmd);
+  } catch (e) {
+    console.warn('paste failed (terminal disposed?):', e);
+  }
 }
 
 function refreshFileTree() {
