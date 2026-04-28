@@ -1118,6 +1118,26 @@ html, body {
   50% { background-color: rgba(245, 166, 35, 0.2); }
 }
 
+/* Migration confirmation: orange background pulse on the moved column for one cycle.
+   Uses attention-pulse (column-scoped) — NOT pulse-attention (dot-scoped). */
+.column.migrated-flash {
+  animation: attention-pulse 1.2s ease-in-out 1;
+}
+
+/* Disabled context-menu item (used when no other workspaces exist) */
+.project-context-item.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.project-context-item.disabled:hover { background: transparent; }
+
+/* Submenu indicator on the parent item */
+.project-context-item.has-submenu::after {
+  content: ' \25B8';
+  opacity: 0.6;
+  margin-left: 6px;
+}
+
 .project-badge.badge-attention .claude-icon,
 .workspace-badge.badge-attention .claude-icon {
   animation: pulse-icon-attention 1.2s ease-in-out infinite;
