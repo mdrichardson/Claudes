@@ -2592,7 +2592,7 @@ function restoreSessions(projectPath, workspaceId) {
           var stillExists = await window.electronAPI.pathExists(e.cwd);
           if (stillExists) {
             rowOpts.cwd = e.cwd;
-            if (e.cwdSource) rowOpts.cwdSource = e.cwdSource;
+            rowOpts.cwdSource = e.cwdSource || 'manual';
           } else {
             console.warn("Column '" + (e.title || e.sessionId) + "' had cwd " + e.cwd + " which no longer exists; restored at project root.");
           }
@@ -4129,7 +4129,7 @@ function persistSessions(projectKey, workspaceId) {
           widthRatio: widthRatio
         };
         if (col2.cwd && col2.cwd !== activeProjectKey) entry.cwd = col2.cwd;
-        if (col2.cwdSource) entry.cwdSource = col2.cwdSource;
+        if (col2.cwd && col2.cwd !== activeProjectKey && col2.cwdSource) entry.cwdSource = col2.cwdSource;
         if (col2.targetBranch) entry.targetBranch = col2.targetBranch;
         if (col2.pipeline) {
           var serializedPipe = PipelineMatcherAPI.serializePipeline(col2.pipeline);
