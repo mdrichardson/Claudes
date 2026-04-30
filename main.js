@@ -1246,8 +1246,32 @@ ipcMain.handle('git:diffStat', async (event, projectPath, staged) => {
   }
 });
 
+async function listGitWorktrees(projectPath) {
+  if (!projectPath) return [];
+  try {
+    const out = await runGit(projectPath, ['worktree', 'list', '--porcelain'], 5000);
+    const entries = [];
+    let cur = {};
+    for (const rawLine of out.split(/\r?\n/)) {
+      const line = rawLine.trimEnd();
+      if (line.startsWith('worktree ')) {
+        if (cur.path) entries.push(cur);
+        cur = { path: line.slice('worktree '.length).trim() };
+      } else if (line.startsWith('branch ')) {
+        cur.branch = line.slice('branch '.length).trim();
+      } else if (line === '') {
+        if (cur.path) { entries.push(cur); cur = {}; }
+      }
+    }
+    if (cur.path) entries.push(cur);
+    return entries;
+  } catch {
+    return [];
+  }
+}
+
 ipcMain.handle('paths:resolveWorktree', (event, projectPath, value) =>
-  resolveWorktreeCandidates(projectPath, value, fs.promises.stat));
+  resolveWorktreeCandidates(projectPath, value, fs.promises.stat, listGitWorktrees));
 
 ipcMain.handle('paths:exists', (event, p) =>
   pathIsDirectory(p, fs.promises.stat));

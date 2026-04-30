@@ -33,6 +33,40 @@ test('resolveWorktreeCandidates: nothing resolves -> flag', async () => {
   assert.deepEqual(await resolveWorktreeCandidates('/proj', 'nope', fakeStat(new Map())), { kind: 'flag', name: 'nope' });
 });
 
+test('resolveWorktreeCandidates: matches by branch (refs/heads/x)', async () => {
+  const wtPath = require('path').join('/wt', 'feat');
+  const stat = fakeStat(new Map([[wtPath, 'dir']]));
+  const list = async () => [{ path: wtPath, branch: 'refs/heads/feat' }];
+  assert.deepEqual(
+    await resolveWorktreeCandidates('/proj', 'feat', stat, list),
+    { kind: 'cwd', path: wtPath }
+  );
+});
+test('resolveWorktreeCandidates: matches by path basename', async () => {
+  const wtPath = require('path').join('/some', 'where', '750-picker');
+  const stat = fakeStat(new Map([[wtPath, 'dir']]));
+  const list = async () => [{ path: wtPath, branch: 'refs/heads/something-else' }];
+  assert.deepEqual(
+    await resolveWorktreeCandidates('/proj', '750-picker', stat, list),
+    { kind: 'cwd', path: wtPath }
+  );
+});
+test('resolveWorktreeCandidates: re-stats hit, dropping stale entries', async () => {
+  const wtPath = require('path').join('/wt', 'gone');
+  const stat = fakeStat(new Map());
+  const list = async () => [{ path: wtPath, branch: 'refs/heads/gone' }];
+  assert.deepEqual(
+    await resolveWorktreeCandidates('/proj', 'gone', stat, list),
+    { kind: 'flag', name: 'gone' }
+  );
+});
+test('resolveWorktreeCandidates: no list fn → original behavior', async () => {
+  assert.deepEqual(
+    await resolveWorktreeCandidates('/proj', 'unknown', fakeStat(new Map())),
+    { kind: 'flag', name: 'unknown' }
+  );
+});
+
 test('pathIsDirectory: empty -> false', async () => {
   assert.equal(await pathIsDirectory('', fakeStat(new Map())), false);
 });
