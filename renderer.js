@@ -3310,8 +3310,6 @@ function addColumn(args, targetRow, opts) {
 
   termWrapper.addEventListener('contextmenu', function (e) {
     e.preventDefault();
-    var rect = termWrapper.getBoundingClientRect();
-    if (rect.bottom - e.clientY > 100) return;
     showRecentCommandsMenu(id, e.clientX, e.clientY);
   });
 

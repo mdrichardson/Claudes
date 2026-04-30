@@ -1950,8 +1950,8 @@ html, body {
 .context-menu {
   position: fixed;
   z-index: 10000;
-  background: var(--bg-panel);
-  border: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
   border-radius: 4px;
   padding: 4px 0;
   min-width: 160px;
@@ -1966,8 +1966,7 @@ html, body {
 }
 
 .context-item:hover:not(.disabled) {
-  background: var(--accent);
-  color: var(--text-bright);
+  background: var(--accent-color);
 }
 
 .context-item.disabled {
