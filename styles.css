@@ -3321,11 +3321,13 @@ html, body {
 
 /* Settings Modal */
 .settings-dialog {
-  width: 480px;
+  width: 560px;
   max-width: 90vw;
 }
 
 .settings-body {
+  flex-direction: column;
+  overflow-y: auto;
   padding: 16px 20px;
 }
 
@@ -5947,7 +5949,25 @@ body.mode-popout #btn-add-project {
 }
 
 .pipeline-step-row .pipeline-step-label {
-  flex: 0 0 140px;
+  flex: 0 0 120px;
+}
+
+.pipeline-step-row .pipeline-step-keywords {
+  flex: 1;
+  min-width: 0;
+}
+
+.pipeline-step-up,
+.pipeline-step-down {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+}
+
+.pipeline-step-delete {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
 }
 
 .pipeline-step-anchor .settings-input {
