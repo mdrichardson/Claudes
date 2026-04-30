@@ -1051,7 +1051,8 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 28px;
+  flex-wrap: wrap;
+  min-height: 28px;
   padding: 0 8px;
   background: var(--bg-toolbar);
   font-size: 12px;
@@ -1162,12 +1163,14 @@ html, body {
 .column-header .col-title {
   font-weight: 500;
   cursor: default;
-  max-width: calc(100% - 72px);
+  max-width: calc(100% - 180px);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
   flex-shrink: 1;
+  height: 28px;
+  line-height: 28px;
 }
 
 .column-header .col-title.editing,
@@ -5869,3 +5872,159 @@ body.mode-popout #btn-add-project {
   min-width: 32px;
   text-align: center;
 }
+
+/* --- Pipeline visualizer (per-terminal) --- */
+
+.col-pipeline {
+  flex-basis: 100%;
+  display: none;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 0;
+  font-size: 11px;
+  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.06));
+}
+
+.col-pipeline.visible {
+  display: flex;
+}
+
+.pp-step {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  padding: 2px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.pp-step:hover {
+  background: var(--bg-button, rgba(255, 255, 255, 0.05));
+}
+
+.pp-step:focus-visible {
+  outline: 1px solid var(--accent, #4a9eff);
+  outline-offset: 1px;
+}
+
+.pp-current {
+  color: var(--text-bright, #ffffff);
+  font-weight: 600;
+  background: var(--bg-button, rgba(255, 255, 255, 0.08));
+  border-color: var(--accent, #4a9eff);
+}
+
+.pp-done {
+  opacity: 0.6;
+}
+
+.pp-done::before {
+  content: "\2713\00a0";
+}
+
+.pp-pending {
+  opacity: 0.4;
+}
+
+.pp-anchor {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.pp-arrow {
+  color: var(--text-secondary);
+  opacity: 0.5;
+  font-size: 11px;
+  user-select: none;
+}
+
+.col-pipeline.compact .pp-step {
+  padding: 2px 6px;
+}
+
+/* --- Pipeline editor (settings dialog) --- */
+
+.pipeline-editor {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 8px;
+}
+
+.pipeline-step-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.pipeline-step-row .settings-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.pipeline-step-row .pipeline-step-label {
+  flex: 0 0 140px;
+}
+
+.pipeline-step-anchor .settings-input {
+  opacity: 0.7;
+}
+
+.pipeline-step-handle {
+  display: inline-block;
+  width: 16px;
+  color: var(--text-secondary);
+  opacity: 0.5;
+  cursor: default;
+  user-select: none;
+  text-align: center;
+}
+
+.pipeline-step-up,
+.pipeline-step-down,
+.pipeline-step-delete {
+  background: transparent;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  color: var(--text-secondary);
+  width: 24px;
+  height: 24px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pipeline-step-up:hover:not(:disabled),
+.pipeline-step-down:hover:not(:disabled),
+.pipeline-step-delete:hover {
+  background: var(--bg-button, rgba(255, 255, 255, 0.05));
+  color: var(--text-bright, #ffffff);
+}
+
+.pipeline-step-up:disabled,
+.pipeline-step-down:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.pipeline-step-delete:hover {
+  border-color: #d33;
+  color: #d33;
+}
+
+.settings-input.error {
+  border-color: #d33;
+}
+
+.settings-hint.error {
+  color: #d33;
+}
+
