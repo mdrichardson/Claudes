@@ -6,6 +6,7 @@ const os = require('os');
 const { spawn, execFile, execFileSync } = require('child_process');
 const http = require('http');
 const { resolveWorktreeCandidates, pathIsDirectory } = require('./lib/path-utils');
+const { findLastGitBranch } = require('./lib/session-branch');
 
 // Set appUserModelId early so Windows uses a consistent taskbar icon across restarts
 app.setAppUserModelId('com.thecodeguy.claudes');
@@ -748,6 +749,31 @@ ipcMain.handle('sessions:getTitle', (event, projectPath, sessionId) => {
   }
 });
 
+// Read the LAST gitBranch recorded in a session JSONL. Tail-reads the file
+// (last ~64KB) since Claude appends turns over time and the most recent
+// branch is always near the end. Returns null on missing file / no match.
+ipcMain.handle('git:detectSessionBranch', (event, projectPath, sessionId) => {
+  if (!projectPath || !sessionId) return null;
+  try {
+    const claudeKey = projectPathToClaudeKey(projectPath);
+    const jsonlPath = path.join(os.homedir(), '.claude', 'projects', claudeKey, sessionId + '.jsonl');
+    const stat = fs.statSync(jsonlPath);
+    const tailSize = Math.min(stat.size, 64 * 1024);
+    if (tailSize === 0) return null;
+    const fd = fs.openSync(jsonlPath, 'r');
+    try {
+      const buf = Buffer.alloc(tailSize);
+      fs.readSync(fd, buf, 0, tailSize, stat.size - tailSize);
+      const content = buf.toString('utf8');
+      return findLastGitBranch(content);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+});
+
 // Save/load session state per project.
 //
 // Disk shape (synthesized v2): { version: 2, sessions: [...], rowHeightRatios: [...],
@@ -1014,7 +1040,10 @@ function runGit(cwd, args, timeout) {
   });
 }
 
-ipcMain.handle('git:status', async (event, projectPath) => {
+ipcMain.handle('git:status', async (event, projectPath, branch) => {
+  // Branch override: working/staged status is only meaningful for the
+  // currently checked-out branch, so report empty for any other branch.
+  if (branch) return [];
   try {
     const output = await runGit(projectPath, ['status', '--porcelain'], 5000);
     return output.replace(/\s+$/, '').split('\n').filter(Boolean).map(line => ({
@@ -1026,7 +1055,8 @@ ipcMain.handle('git:status', async (event, projectPath) => {
   }
 });
 
-ipcMain.handle('git:branch', async (event, projectPath) => {
+ipcMain.handle('git:branch', async (event, projectPath, branch) => {
+  if (branch) return branch;
   try {
     return (await runGit(projectPath, ['branch', '--show-current'], 5000)).trim();
   } catch {
@@ -1137,7 +1167,22 @@ ipcMain.handle('git:createBranch', async (event, projectPath, branchName) => {
   }
 });
 
-ipcMain.handle('git:aheadBehind', async (event, projectPath) => {
+ipcMain.handle('git:aheadBehind', async (event, projectPath, branch) => {
+  if (branch) {
+    try {
+      // ahead = local-only, behind = upstream-only, matching the shape
+      // returned by the no-branch path. left = upstream, right = branch.
+      const output = await runGit(
+        projectPath,
+        ['rev-list', '--left-right', '--count', 'refs/remotes/origin/' + branch + '...refs/heads/' + branch],
+        5000
+      );
+      const parts = output.trim().split(/\s+/);
+      return { ahead: parseInt(parts[1]) || 0, behind: parseInt(parts[0]) || 0 };
+    } catch {
+      return { ahead: 0, behind: 0 };
+    }
+  }
   try {
     const output = await runGit(projectPath, ['rev-list', '--count', '--left-right', 'HEAD...@{upstream}'], 5000);
     const parts = output.trim().split(/\s+/);
@@ -1162,9 +1207,11 @@ ipcMain.handle('git:diff', async (event, projectPath, filePath, staged) => {
   }
 });
 
-ipcMain.handle('git:graphLog', async (event, projectPath, count) => {
+ipcMain.handle('git:graphLog', async (event, projectPath, count, branch) => {
   try {
-    const output = await runGit(projectPath, ['log', '--format=%H|%h|%P|%s|%an|%ar|%D', '-' + (count || 50), '--no-color'], 10000);
+    const args = ['log', '--format=%H|%h|%P|%s|%an|%ar|%D', '-' + (count || 50), '--no-color'];
+    if (branch) args.push('refs/heads/' + branch);
+    const output = await runGit(projectPath, args, 10000);
     return output.trim().split('\n').filter(Boolean).map(line => {
       const parts = line.split('|');
       return {
@@ -1250,7 +1297,11 @@ ipcMain.handle('git:diffCommit', async (event, projectPath, hash, filePath) => {
   }
 });
 
-ipcMain.handle('git:diffStat', async (event, projectPath, staged) => {
+ipcMain.handle('git:diffStat', async (event, projectPath, staged, branch) => {
+  // Branch override: working/staged diffs only mean something for the
+  // currently checked-out branch. For a non-checked-out branch the renderer
+  // should call git:diffStatVsBase instead.
+  if (branch) return [];
   try {
     const args = staged ? ['diff', '--numstat', '--cached'] : ['diff', '--numstat'];
     const output = await runGit(projectPath, args, 5000);
@@ -1265,6 +1316,33 @@ ipcMain.handle('git:diffStat', async (event, projectPath, staged) => {
   } catch {
     return [];
   }
+});
+
+// Branch-vs-base diff: file-level numstat for `<base>...<branch>`.
+// baseRef defaults to origin/main, falling back to origin/master, then HEAD.
+ipcMain.handle('git:diffStatVsBase', async (event, projectPath, branch, baseRef) => {
+  if (!projectPath || !branch) return [];
+  const tryBases = baseRef ? [baseRef] : ['origin/main', 'origin/master', 'HEAD'];
+  for (const base of tryBases) {
+    try {
+      const output = await runGit(
+        projectPath,
+        ['diff', '--numstat', base + '...refs/heads/' + branch],
+        10000
+      );
+      return output.trim().split('\n').filter(Boolean).map(line => {
+        const parts = line.split('\t');
+        return {
+          insertions: parts[0] === '-' ? 0 : parseInt(parts[0]) || 0,
+          deletions: parts[1] === '-' ? 0 : parseInt(parts[1]) || 0,
+          file: parts[2]
+        };
+      });
+    } catch {
+      // try next base
+    }
+  }
+  return [];
 });
 
 async function listGitWorktrees(projectPath) {

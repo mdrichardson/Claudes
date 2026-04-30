@@ -2508,13 +2508,15 @@ function restoreSessions(projectPath, workspaceId) {
         for (var c = 0; c < srowCols.length; c++) {
           var lcol = srowCols[c] || {};
           if (!lcol.sessionId) continue;
-          entries.push({
+          var legacyEntry = {
             rowIdx: r,
             sessionId: lcol.sessionId,
             title: lcol.title || null,
             widthRatio: (typeof lcol.widthRatio === 'number' && isFinite(lcol.widthRatio) && lcol.widthRatio > 0) ? lcol.widthRatio : null,
             pipeline: lcol.pipeline || null
-          });
+          };
+          if (typeof lcol.targetBranch === 'string' && lcol.targetBranch) legacyEntry.targetBranch = lcol.targetBranch;
+          entries.push(legacyEntry);
         }
       }
     } else if (slice && slice.length > 0) {
@@ -2529,8 +2531,10 @@ function restoreSessions(projectPath, workspaceId) {
         var widthRatio = (typeof entry === 'object' && entry && typeof entry.widthRatio === 'number' && isFinite(entry.widthRatio) && entry.widthRatio > 0) ? entry.widthRatio : null;
         var title = (typeof entry === 'object' && entry && entry.title) ? entry.title : null;
         var cwd = (typeof entry === 'object' && entry && typeof entry.cwd === 'string' && entry.cwd) ? entry.cwd : null;
+        var targetBranch = (typeof entry === 'object' && entry && typeof entry.targetBranch === 'string' && entry.targetBranch) ? entry.targetBranch : null;
         var pushedEntry = { rowIdx: rowIdx, sessionId: sid, title: title, widthRatio: widthRatio };
         if (cwd) pushedEntry.cwd = cwd;
+        if (targetBranch) pushedEntry.targetBranch = targetBranch;
         if (typeof entry === 'object' && entry && entry.pipeline) pushedEntry.pipeline = entry.pipeline;
         entries.push(pushedEntry);
       }
@@ -2587,6 +2591,7 @@ function restoreSessions(projectPath, workspaceId) {
             console.warn("Column '" + (e.title || e.sessionId) + "' had cwd " + e.cwd + " which no longer exists; restored at project root.");
           }
         }
+        if (e.targetBranch) rowOpts.targetBranch = e.targetBranch;
         if (e.pipeline) rowOpts.pipelineState = e.pipeline;
         addColumn(spawnArgs.concat(['--resume', e.sessionId]), targetRow, rowOpts);
       }
@@ -3330,6 +3335,7 @@ function addColumn(args, targetRow, opts) {
     fitAddon: fitAddon,
     headerEl: header,
     cwd: cwd,
+    targetBranch: opts.targetBranch || null,
     projectKey: activeProjectKey,
     // Stamp the workspaceId so later persist/restore/focus-flow can route to
     // the right bucket. Honor explicit opts.workspaceId (popout transfers,
@@ -4111,6 +4117,7 @@ function persistSessions(projectKey, workspaceId) {
           widthRatio: widthRatio
         };
         if (col2.cwd && col2.cwd !== activeProjectKey) entry.cwd = col2.cwd;
+        if (col2.targetBranch) entry.targetBranch = col2.targetBranch;
         if (col2.pipeline) {
           var serializedPipe = PipelineMatcherAPI.serializePipeline(col2.pipeline);
           if (serializedPipe) entry.pipeline = serializedPipe;
@@ -4384,10 +4391,17 @@ function setFocusedColumn(id) {
   }
 
   invalidatePathExists(gitTargetCwd());
+  invalidateProjectRootBranch(col.projectKey);
   if (isGitTabActive()) {
     refreshGitStatus(true);
     updateGitTargetIndicator();
   }
+  autoBindColumnTarget(id).then(function () {
+    if (isGitTabActive()) {
+      refreshGitStatus(true);
+      updateGitTargetIndicator();
+    }
+  });
 }
 
 function navigateColumn(direction) {
@@ -5228,6 +5242,64 @@ function gitTargetCwd() {
   return window.GitTarget.getGitTargetCwd(getActiveState(), allColumns, activeProjectKey);
 }
 
+// Phase 2: per-column branch override. When the focused column's session was last
+// active on a branch other than what's currently checked out at the project root,
+// `targetBranch` makes the Git tab render branch-relative (read-only) data.
+var projectRootBranchCache = new Map();
+
+function getProjectRootBranch(projectKey) {
+  var now = Date.now();
+  var hit = projectRootBranchCache.get(projectKey);
+  if (hit && hit.expiresAt > now) return Promise.resolve(hit.branch);
+  return window.electronAPI.gitBranch(projectKey).then(function (branch) {
+    projectRootBranchCache.set(projectKey, { branch: branch || '', expiresAt: now + 30000 });
+    return branch || '';
+  });
+}
+
+function invalidateProjectRootBranch(projectKey) {
+  if (projectKey) projectRootBranchCache.delete(projectKey);
+}
+
+function autoBindColumnTarget(colId) {
+  var col = allColumns.get(colId);
+  if (!col || !col.sessionId || !col.projectKey) return Promise.resolve();
+  // Skip auto-bind for columns explicitly bound to a non-project-root cwd —
+  // their cwd is the source of truth (Phase 1 worktree column behavior).
+  if (col.cwd && col.cwd !== col.projectKey) return Promise.resolve();
+
+  return window.electronAPI.gitDetectSessionBranch(col.projectKey, col.sessionId).then(function (sessionBranch) {
+    if (!sessionBranch) {
+      if (col.targetBranch !== null) {
+        col.targetBranch = null;
+        persistSessions(col.projectKey, col.workspaceId);
+      }
+      return;
+    }
+    return getProjectRootBranch(col.projectKey).then(function (rootBranch) {
+      // If session's branch matches the project root's current branch, no override needed.
+      if (sessionBranch === rootBranch) {
+        if (col.targetBranch !== null) {
+          col.targetBranch = null;
+          persistSessions(col.projectKey, col.workspaceId);
+        }
+        return;
+      }
+      if (col.targetBranch !== sessionBranch) {
+        col.targetBranch = sessionBranch;
+        persistSessions(col.projectKey, col.workspaceId);
+      }
+    });
+  }).catch(function () { /* best-effort */ });
+}
+
+function gitTabIsReadOnly() {
+  var state = getActiveState();
+  if (!state || state.focusedColumnId == null) return false;
+  var col = allColumns.get(state.focusedColumnId);
+  return !!(col && col.targetBranch);
+}
+
 function normalizePathForCompare(p) {
   if (!p) return '';
   var s = String(p).replace(/\\/g, '/');
@@ -5259,15 +5331,25 @@ function updateGitTargetIndicator(opts) {
   var targetNorm = normalizePathForCompare(target);
   var rootNorm = normalizePathForCompare(activeProjectKey);
 
+  // Phase 2: per-column branch override on the focused column.
+  var fState = getActiveState();
+  var focusedCol = (fState && fState.focusedColumnId != null) ? allColumns.get(fState.focusedColumnId) : null;
+  var branchOverride = (focusedCol && focusedCol.targetBranch) || null;
+
   var labelText = '';
   var titleText = target || '';
 
   if (target && targetNorm !== rootNorm) {
+    // Phase 1: explicit non-root cwd (worktree column).
     if (rootNorm && targetNorm.indexOf(rootNorm + '/') === 0) {
       labelText = '→ ./' + targetNorm.slice(rootNorm.length + 1);
     } else {
       labelText = '→ ' + target;
     }
+  } else if (branchOverride) {
+    // Phase 2: project-root column tracking a different branch.
+    labelText = '→ branch ' + branchOverride;
+    titleText = "Showing branch " + branchOverride + " (not currently checked out). Read-only — switch branches to commit.";
   }
 
   var suffix = '';
@@ -5308,7 +5390,25 @@ function refreshGitStatus(force) {
   // backed-up git calls piling up on the main thread when the repo or disk is slow.
   if (gitPollInFlight && !force) return;
 
+  // Fire-and-forget autoBind on the focused column. If it changes targetBranch,
+  // schedule another refresh so the next paint reflects the new override.
+  var fState = getActiveState();
+  var focusedId = fState ? fState.focusedColumnId : null;
+  if (focusedId != null) {
+    var fCol = allColumns.get(focusedId);
+    var prevBranch = fCol ? fCol.targetBranch : null;
+    autoBindColumnTarget(focusedId).then(function () {
+      var newCol = allColumns.get(focusedId);
+      if (newCol && newCol.targetBranch !== prevBranch) {
+        refreshGitStatus(true);
+        updateGitTargetIndicator();
+      }
+    });
+  }
+
   var target = gitTargetCwd();
+  var focusedCol = focusedId != null ? allColumns.get(focusedId) : null;
+  var branchOverride = (focusedCol && focusedCol.targetBranch) || null;
 
   gitPollInFlight = true;
   var done = function () { gitPollInFlight = false; };
@@ -5324,22 +5424,23 @@ function refreshGitStatus(force) {
     }
 
     var fetchAll = [
-      window.electronAPI.gitStatus(target),
-      window.electronAPI.gitBranch(target),
-      window.electronAPI.gitAheadBehind(target),
+      window.electronAPI.gitStatus(target, branchOverride),
+      window.electronAPI.gitBranch(target, branchOverride),
+      window.electronAPI.gitAheadBehind(target, branchOverride),
       window.electronAPI.gitStashList(target),
-      window.electronAPI.gitGraphLog(target, 50),
-      window.electronAPI.gitDiffStat(target, false),
-      window.electronAPI.gitDiffStat(target, true),
-      window.electronAPI.gitIsInsideWorkTree(target)
+      window.electronAPI.gitGraphLog(target, 50, branchOverride),
+      window.electronAPI.gitDiffStat(target, false, branchOverride),
+      window.electronAPI.gitDiffStat(target, true, branchOverride),
+      window.electronAPI.gitIsInsideWorkTree(target),
+      branchOverride ? window.electronAPI.gitDiffStatVsBase(target, branchOverride) : Promise.resolve(null)
     ];
 
     if (!force) {
       Promise.all(fetchAll).then(function (results) {
-        var rawKey = JSON.stringify(results[0]) + '|' + results[1] + '|' + JSON.stringify(results[2]) + '|' + results[3].length + '|' + JSON.stringify(results[4]) + '|' + results[7];
+        var rawKey = JSON.stringify(results[0]) + '|' + results[1] + '|' + JSON.stringify(results[2]) + '|' + results[3].length + '|' + JSON.stringify(results[4]) + '|' + results[7] + '|' + JSON.stringify(results[8]);
         if (rawKey === lastGitRaw) return;
         lastGitRaw = rawKey;
-        renderGitStatus(results[0], results[1], results[2], results[3], results[4], results[5], results[6]);
+        renderGitStatus(results[0], results[1], results[2], results[3], results[4], results[5], results[6], results[8], branchOverride);
         updateGitTargetIndicator({ notARepo: !results[7] });
       }).then(done, done);
       return;
@@ -5347,17 +5448,24 @@ function refreshGitStatus(force) {
 
     lastGitRaw = null;
     Promise.all(fetchAll).then(function (results) {
-      lastGitRaw = JSON.stringify(results[0]) + '|' + results[1] + '|' + JSON.stringify(results[2]) + '|' + results[3].length + '|' + JSON.stringify(results[4]) + '|' + results[7];
-      renderGitStatus(results[0], results[1], results[2], results[3], results[4], results[5], results[6]);
+      lastGitRaw = JSON.stringify(results[0]) + '|' + results[1] + '|' + JSON.stringify(results[2]) + '|' + results[3].length + '|' + JSON.stringify(results[4]) + '|' + results[7] + '|' + JSON.stringify(results[8]);
+      renderGitStatus(results[0], results[1], results[2], results[3], results[4], results[5], results[6], results[8], branchOverride);
       updateGitTargetIndicator({ notARepo: !results[7] });
     }).then(done, done);
   }, done);
 }
 
-function renderGitStatus(files, branch, aheadBehind, stashes, graphLog, unstagedStats, stagedStats) {
+function renderGitStatus(files, branch, aheadBehind, stashes, graphLog, unstagedStats, stagedStats, diffVsBase, branchOverride) {
   graphLaneState = null;
+  var readOnly = !!branchOverride;
   while (gitHeaderEl.firstChild) gitHeaderEl.removeChild(gitHeaderEl.firstChild);
   while (gitChangesEl.firstChild) gitChangesEl.removeChild(gitChangesEl.firstChild);
+
+  if (readOnly) {
+    gitHeaderEl.classList.add('git-readonly');
+  } else {
+    gitHeaderEl.classList.remove('git-readonly');
+  }
 
   // Branch row (clickable branch switcher + pull/push/stash buttons)
   var row = document.createElement('div');
@@ -5377,18 +5485,33 @@ function renderGitStatus(files, branch, aheadBehind, stashes, graphLog, unstaged
   var actions = document.createElement('span');
   actions.className = 'git-branch-actions';
 
+  var readOnlyTip = readOnly
+    ? "Branch " + branchOverride + " isn't checked out \u2014 switch to it in your editor (or in a terminal: git checkout " + branchOverride + ") to commit or stage changes."
+    : null;
+
+  if (readOnly) {
+    // Surface a "Check out this branch" affordance prominently in branch-relative mode.
+    var checkoutBtn = document.createElement('button');
+    checkoutBtn.className = 'git-action-btn';
+    checkoutBtn.textContent = '\u21B3 Check out';
+    checkoutBtn.title = 'Check out ' + branchOverride;
+    checkoutBtn.addEventListener('click', function () { gitCheckout(branchOverride); });
+    actions.appendChild(checkoutBtn);
+  }
+
   // Stash button
   var stashBtn = document.createElement('button');
   stashBtn.className = 'git-action-btn';
   stashBtn.textContent = '\u2691 Stash';
-  stashBtn.title = 'Stash changes';
+  stashBtn.title = readOnlyTip || 'Stash changes';
+  if (readOnly) { stashBtn.disabled = true; stashBtn.classList.add('git-disabled'); }
   stashBtn.addEventListener('click', function () { gitStashPush(); });
   actions.appendChild(stashBtn);
 
   // Pop button with badge
   var popBtn = document.createElement('button');
   popBtn.className = 'git-action-btn';
-  popBtn.title = 'Pop stash';
+  popBtn.title = readOnlyTip || 'Pop stash';
   popBtn.textContent = '\u2691 Pop';
   if (stashes.length > 0) {
     var badge = document.createElement('span');
@@ -5399,13 +5522,14 @@ function renderGitStatus(files, branch, aheadBehind, stashes, graphLog, unstaged
     popBtn.disabled = true;
     popBtn.style.opacity = '0.4';
   }
+  if (readOnly) { popBtn.disabled = true; popBtn.classList.add('git-disabled'); }
   popBtn.addEventListener('click', function () { gitStashPop(); });
   actions.appendChild(popBtn);
 
   // Pull button with behind count
   var pullBtn = document.createElement('button');
   pullBtn.className = 'git-action-btn';
-  pullBtn.title = 'Pull';
+  pullBtn.title = readOnlyTip || 'Pull';
   pullBtn.textContent = '\u2193 Pull';
   if (aheadBehind.behind > 0) {
     var pullBadge = document.createElement('span');
@@ -5413,13 +5537,14 @@ function renderGitStatus(files, branch, aheadBehind, stashes, graphLog, unstaged
     pullBadge.textContent = aheadBehind.behind;
     pullBtn.appendChild(pullBadge);
   }
+  if (readOnly) { pullBtn.disabled = true; pullBtn.classList.add('git-disabled'); }
   pullBtn.addEventListener('click', function () { gitPull(); });
   actions.appendChild(pullBtn);
 
   // Push button with ahead count
   var pushBtn = document.createElement('button');
   pushBtn.className = 'git-action-btn';
-  pushBtn.title = 'Push';
+  pushBtn.title = readOnlyTip || 'Push';
   pushBtn.textContent = '\u2191 Push';
   if (aheadBehind.ahead > 0) {
     var pushBadge = document.createElement('span');
@@ -5427,11 +5552,33 @@ function renderGitStatus(files, branch, aheadBehind, stashes, graphLog, unstaged
     pushBadge.textContent = aheadBehind.ahead;
     pushBtn.appendChild(pushBadge);
   }
+  if (readOnly) { pushBtn.disabled = true; pushBtn.classList.add('git-disabled'); }
   pushBtn.addEventListener('click', function () { gitPush(); });
   actions.appendChild(pushBtn);
 
   row.appendChild(actions);
   gitHeaderEl.appendChild(row);
+
+  if (readOnly) {
+    // Branch-relative read-only mode: render diff-vs-base instead of working/staged.
+    // gitStatus + diffStat returned empty by main; ignore them.
+    var baseList = Array.isArray(diffVsBase) ? diffVsBase : [];
+    if (baseList.length === 0 && graphLog.length === 0) {
+      var emptyR = document.createElement('div');
+      emptyR.className = 'git-empty';
+      emptyR.textContent = 'No changes vs base';
+      gitChangesEl.appendChild(emptyR);
+      return;
+    }
+    if (baseList.length > 0) {
+      var baseFiles = baseList.map(function (s) { return { status: 'M', file: s.file }; });
+      gitChangesEl.appendChild(createGitSection('Changes vs base', baseFiles, false, baseList, { readOnly: true }));
+    }
+    if (graphLog.length > 0) {
+      gitChangesEl.appendChild(createGitGraphSection(graphLog));
+    }
+    return;
+  }
 
   // Parse status into staged vs unstaged
   var staged = [];
@@ -5779,7 +5926,9 @@ function countTreeFiles(node) {
   return count;
 }
 
-function createGitSection(title, files, isStaged, stats) {
+function createGitSection(title, files, isStaged, stats, opts) {
+  opts = opts || {};
+  var readOnly = !!opts.readOnly;
   var section = document.createElement('div');
   section.className = 'git-section';
 
@@ -5797,20 +5946,22 @@ function createGitSection(title, files, isStaged, stats) {
   var actions = document.createElement('span');
   actions.className = 'git-section-actions';
 
-  if (isStaged) {
-    var unstageAllBtn = document.createElement('button');
-    unstageAllBtn.className = 'git-file-action';
-    unstageAllBtn.textContent = '\u2212';
-    unstageAllBtn.title = 'Unstage All';
-    unstageAllBtn.addEventListener('click', function (e) { e.stopPropagation(); gitUnstageAll(); });
-    actions.appendChild(unstageAllBtn);
-  } else {
-    var stageAllBtn = document.createElement('button');
-    stageAllBtn.className = 'git-file-action';
-    stageAllBtn.textContent = '+';
-    stageAllBtn.title = 'Stage All';
-    stageAllBtn.addEventListener('click', function (e) { e.stopPropagation(); gitStageAll(); });
-    actions.appendChild(stageAllBtn);
+  if (!readOnly) {
+    if (isStaged) {
+      var unstageAllBtn = document.createElement('button');
+      unstageAllBtn.className = 'git-file-action';
+      unstageAllBtn.textContent = '\u2212';
+      unstageAllBtn.title = 'Unstage All';
+      unstageAllBtn.addEventListener('click', function (e) { e.stopPropagation(); gitUnstageAll(); });
+      actions.appendChild(unstageAllBtn);
+    } else {
+      var stageAllBtn = document.createElement('button');
+      stageAllBtn.className = 'git-file-action';
+      stageAllBtn.textContent = '+';
+      stageAllBtn.title = 'Stage All';
+      stageAllBtn.addEventListener('click', function (e) { e.stopPropagation(); gitStageAll(); });
+      actions.appendChild(stageAllBtn);
+    }
   }
 
   header.appendChild(arrow);
@@ -5828,7 +5979,7 @@ function createGitSection(title, files, isStaged, stats) {
     }
   }
   var tree = buildFileTree(files);
-  renderFileTreeNode(list, tree, isStaged, statsMap, 0);
+  renderFileTreeNode(list, tree, isStaged, statsMap, 0, readOnly);
 
   section.appendChild(list);
 
@@ -5841,7 +5992,7 @@ function createGitSection(title, files, isStaged, stats) {
   return section;
 }
 
-function renderFileTreeNode(container, node, isStaged, statsMap, depth) {
+function renderFileTreeNode(container, node, isStaged, statsMap, depth, readOnly) {
   var folderNames = Object.keys(node.folders).sort();
   for (var f = 0; f < folderNames.length; f++) {
     (function (folderName) {
@@ -5872,7 +6023,7 @@ function renderFileTreeNode(container, node, isStaged, statsMap, depth) {
 
       var folderContent = document.createElement('div');
       folderContent.className = 'git-tree-folder-content';
-      renderFileTreeNode(folderContent, folder, isStaged, statsMap, depth + 1);
+      renderFileTreeNode(folderContent, folder, isStaged, statsMap, depth + 1, readOnly);
       folderEl.appendChild(folderContent);
 
       folderHeader.addEventListener('click', function () {
@@ -5886,11 +6037,11 @@ function renderFileTreeNode(container, node, isStaged, statsMap, depth) {
   }
 
   for (var i = 0; i < node.files.length; i++) {
-    container.appendChild(createGitFileRow(node.files[i], isStaged, statsMap, depth));
+    container.appendChild(createGitFileRow(node.files[i], isStaged, statsMap, depth, readOnly));
   }
 }
 
-function createGitFileRow(file, isStaged, statsMap, depth) {
+function createGitFileRow(file, isStaged, statsMap, depth, readOnly) {
   var container = document.createElement('div');
   container.className = 'git-file-container';
 
@@ -5938,28 +6089,30 @@ function createGitFileRow(file, isStaged, statsMap, depth) {
   var actions = document.createElement('span');
   actions.className = 'git-file-actions';
 
-  if (isStaged) {
-    var unstageBtn = document.createElement('button');
-    unstageBtn.className = 'git-file-action';
-    unstageBtn.textContent = '\u2212';
-    unstageBtn.title = 'Unstage';
-    unstageBtn.addEventListener('click', function (e) { e.stopPropagation(); gitUnstageFile(file.file); });
-    actions.appendChild(unstageBtn);
-  } else {
-    var stageBtn = document.createElement('button');
-    stageBtn.className = 'git-file-action';
-    stageBtn.textContent = '+';
-    stageBtn.title = 'Stage';
-    stageBtn.addEventListener('click', function (e) { e.stopPropagation(); gitStageFile(file.file); });
-    actions.appendChild(stageBtn);
+  if (!readOnly) {
+    if (isStaged) {
+      var unstageBtn = document.createElement('button');
+      unstageBtn.className = 'git-file-action';
+      unstageBtn.textContent = '\u2212';
+      unstageBtn.title = 'Unstage';
+      unstageBtn.addEventListener('click', function (e) { e.stopPropagation(); gitUnstageFile(file.file); });
+      actions.appendChild(unstageBtn);
+    } else {
+      var stageBtn = document.createElement('button');
+      stageBtn.className = 'git-file-action';
+      stageBtn.textContent = '+';
+      stageBtn.title = 'Stage';
+      stageBtn.addEventListener('click', function (e) { e.stopPropagation(); gitStageFile(file.file); });
+      actions.appendChild(stageBtn);
 
-    if (!file.untracked) {
-      var discardBtn = document.createElement('button');
-      discardBtn.className = 'git-file-action git-discard';
-      discardBtn.textContent = '\u21A9';
-      discardBtn.title = 'Discard Changes';
-      discardBtn.addEventListener('click', function (e) { e.stopPropagation(); gitDiscardFile(file.file); });
-      actions.appendChild(discardBtn);
+      if (!file.untracked) {
+        var discardBtn = document.createElement('button');
+        discardBtn.className = 'git-file-action git-discard';
+        discardBtn.textContent = '\u21A9';
+        discardBtn.title = 'Discard Changes';
+        discardBtn.addEventListener('click', function (e) { e.stopPropagation(); gitDiscardFile(file.file); });
+        actions.appendChild(discardBtn);
+      }
     }
   }
 
@@ -5980,31 +6133,37 @@ function gitStatusClass(status) {
 
 function gitStageFile(filePath) {
   if (!activeProjectKey || !window.electronAPI) return;
+  if (gitTabIsReadOnly()) return;
   window.electronAPI.gitStageFile(gitTargetCwd(), filePath).then(function () { refreshGitStatus(); });
 }
 
 function gitUnstageFile(filePath) {
   if (!activeProjectKey || !window.electronAPI) return;
+  if (gitTabIsReadOnly()) return;
   window.electronAPI.gitUnstageFile(gitTargetCwd(), filePath).then(function () { refreshGitStatus(); });
 }
 
 function gitStageAll() {
   if (!activeProjectKey || !window.electronAPI) return;
+  if (gitTabIsReadOnly()) return;
   window.electronAPI.gitStageAll(gitTargetCwd()).then(function () { refreshGitStatus(); });
 }
 
 function gitUnstageAll() {
   if (!activeProjectKey || !window.electronAPI) return;
+  if (gitTabIsReadOnly()) return;
   window.electronAPI.gitUnstageAll(gitTargetCwd()).then(function () { refreshGitStatus(); });
 }
 
 function gitDiscardFile(filePath) {
   if (!activeProjectKey || !window.electronAPI) return;
+  if (gitTabIsReadOnly()) return;
   window.electronAPI.gitDiscardFile(gitTargetCwd(), filePath).then(function () { refreshGitStatus(); });
 }
 
 function gitCommit() {
   if (!activeProjectKey || !window.electronAPI) return;
+  if (gitTabIsReadOnly()) return;
   var msg = gitCommitMsg.value.trim();
   if (!msg) return;
   var amend = gitAmendCheckbox && gitAmendCheckbox.checked;
@@ -6048,6 +6207,7 @@ function gitCreateBranch(branchName) {
 
 function gitStashPush() {
   if (!activeProjectKey || !window.electronAPI) return;
+  if (gitTabIsReadOnly()) return;
   showGitStatus('Stashing...');
   window.electronAPI.gitStashPush(gitTargetCwd()).then(function (result) {
     if (result.success) {
@@ -6061,6 +6221,7 @@ function gitStashPush() {
 
 function gitStashPop() {
   if (!activeProjectKey || !window.electronAPI) return;
+  if (gitTabIsReadOnly()) return;
   showGitStatus('Popping stash...');
   window.electronAPI.gitStashPop(gitTargetCwd()).then(function (result) {
     if (result.success) {
@@ -6074,6 +6235,7 @@ function gitStashPop() {
 
 function gitPull() {
   if (!activeProjectKey || !window.electronAPI) return;
+  if (gitTabIsReadOnly()) return;
   showGitStatus('Pulling...');
   window.electronAPI.gitPull(gitTargetCwd()).then(function (result) {
     if (result.success) {
@@ -6087,6 +6249,7 @@ function gitPull() {
 
 function gitPush() {
   if (!activeProjectKey || !window.electronAPI) return;
+  if (gitTabIsReadOnly()) return;
   showGitStatus('Pushing...');
   window.electronAPI.gitPush(gitTargetCwd()).then(function (result) {
     if (result.success) {
