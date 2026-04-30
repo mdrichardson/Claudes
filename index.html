@@ -318,18 +318,7 @@
         <div class="settings-section">
           <h3 class="settings-section-title">Workflow Pipelines</h3>
           <p class="settings-hint">Steps shown in each terminal's title bar after Claude enters Plan mode. "Plan" and "Execute" auto-detect from plan-mode entry/exit.</p>
-          <div id="pipeline-editor" class="pipeline-editor">
-            <div class="pipeline-step-row pipeline-step-anchor">
-              <span class="pipeline-step-handle">&#x22ee;&#x22ee;</span>
-              <input class="settings-input" value="Plan" disabled>
-              <input class="settings-input" value="(auto: Plan-mode entry)" disabled>
-            </div>
-            <div class="pipeline-step-row pipeline-step-anchor">
-              <span class="pipeline-step-handle">&#x22ee;&#x22ee;</span>
-              <input class="settings-input" value="Execute" disabled>
-              <input class="settings-input" value="(auto: Plan-mode exit)" disabled>
-            </div>
-          </div>
+          <div id="pipeline-editor" class="pipeline-editor"></div>
           <div id="pipeline-editor-error" class="settings-hint error" style="display:none;"></div>
           <button id="btn-add-pipeline-step" class="settings-browse-btn">+ Add step</button>
         </div>
