@@ -54,6 +54,14 @@ test('PLAN_MODE_BANNER: matches Claude 2.1.123 captured shape (24-bit RGB foregr
   assert.ok(PLAN_MODE_BANNER.test(input));
 });
 
+test('PLAN_MODE_BANNER: matches Claude 2.1.123 real captured bytes (with CUP escape between SGR and phrase)', () => {
+  // Actual byte stream from Claude Code 2.1.123 — includes a CSI cursor-position
+  // escape (\x1b[16;3H) between the 24-bit RGB SGR colour and the pause glyph.
+  // The original hand-written test omitted this escape, masking a real-world bug.
+  const input = '\x1b[38;2;72;150;140m\x1b[16;3H⏸ plan mode on \x1b[38;2;153;153;153m(shift+tab to cycle)';
+  assert.ok(PLAN_MODE_BANNER.test(input));
+});
+
 test('PLAN_MODE_BANNER: matches simple SGR + literal phrase', () => {
   assert.ok(PLAN_MODE_BANNER.test('\x1b[7m plan mode on \x1b[0m'));
   assert.ok(PLAN_MODE_BANNER.test('\x1b[1;36m plan mode on'));
@@ -71,9 +79,12 @@ test('PLAN_MODE_BANNER: does not match unstyled "plan mode on" (no SGR prefix)',
   assert.ok(!PLAN_MODE_BANNER.test('I will turn plan mode on shortly'));
 });
 
-test('PLAN_MODE_BANNER: does not match when SGR escape is far from phrase', () => {
-  // SGR-end-of-prefix more than 40 bytes from the literal phrase: rejected.
-  const input = '\x1b[7m' + 'x'.repeat(60) + 'plan mode on';
+test('PLAN_MODE_BANNER: does not match when SGR escape is far from phrase (plain-byte gap)', () => {
+  // 100 plain bytes between the SGR and the phrase. Each plain byte counts
+  // as one unit under the regex's {0,80} cap, so 100 > 80 → rejected.
+  // (Note: a CSI escape in the gap counts as a *single* unit regardless of
+  // its byte length, so the cap bounds units, not raw bytes.)
+  const input = '\x1b[7m' + 'x'.repeat(100) + 'plan mode on';
   assert.ok(!PLAN_MODE_BANNER.test(input));
 });
 
