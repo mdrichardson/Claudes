@@ -463,6 +463,92 @@ var FONT_SIZE_MAX = 28;
 var FONT_SIZE_DEFAULT = 14;
 
 // ============================================================
+// Pipeline visualizer (per-terminal)
+// ============================================================
+
+var pipelinesConfig = { version: 1, pipeline: { id: 'default', name: 'Default workflow', userSteps: [] } };
+var PipelineMatcherAPI = (typeof window !== 'undefined' && window.PipelineMatcher) ? window.PipelineMatcher : null;
+
+function loadPipelines() {
+  if (!window.electronAPI || !window.electronAPI.loadPipelines) return;
+  window.electronAPI.loadPipelines().then(function (data) {
+    if (data && typeof data === 'object' && data.pipeline && Array.isArray(data.pipeline.userSteps)) {
+      pipelinesConfig = data;
+    }
+    bindPipelineEditor();
+  }).catch(function () { /* keep defaults */ });
+}
+
+function savePipelines() {
+  if (!window.electronAPI || !window.electronAPI.savePipelines) return;
+  window.electronAPI.savePipelines(pipelinesConfig);
+}
+
+function resolveSteps(cfg) {
+  var steps = [
+    { id: 'anchor-plan', label: 'Plan', complete: false },
+    { id: 'anchor-execute', label: 'Execute', complete: false }
+  ];
+  if (cfg && cfg.pipeline && Array.isArray(cfg.pipeline.userSteps)) {
+    for (var i = 0; i < cfg.pipeline.userSteps.length; i++) {
+      var us = cfg.pipeline.userSteps[i];
+      if (!us || !us.id || !us.label) continue;
+      steps.push({ id: us.id, label: us.label, complete: false });
+    }
+  }
+  return steps;
+}
+
+function buildPipelineState(persisted) {
+  var state = {
+    visible: false,
+    steps: resolveSteps(pipelinesConfig),
+    currentIdx: 0,
+    flags: { plan: false },
+    lastBannerSeenAt: 0,
+    bannerTail: '',
+    exitCheckIntervalId: null,
+    restoredWithProgress: false
+  };
+  if (persisted && typeof persisted === 'object') {
+    if (Array.isArray(persisted.steps) && persisted.steps.length > 0) {
+      // Use persisted step list directly so progress is preserved across pipeline edits.
+      state.steps = persisted.steps.map(function (s) {
+        return { id: s.id, label: s.label, complete: !!s.complete };
+      });
+    }
+    if (typeof persisted.currentIdx === 'number' && persisted.currentIdx >= 0) {
+      state.currentIdx = Math.min(persisted.currentIdx, state.steps.length);
+    }
+    if (typeof persisted.visible === 'boolean') state.visible = persisted.visible;
+    var anyComplete = state.steps.some(function (s) { return s.complete === true; });
+    if (anyComplete || state.currentIdx > 0) state.restoredWithProgress = true;
+  }
+  return state;
+}
+
+function serializePipeline(pipelineState) {
+  if (!pipelineState) return null;
+  return {
+    steps: (pipelineState.steps || []).map(function (s) {
+      return { id: s.id, label: s.label, complete: !!s.complete };
+    }),
+    currentIdx: pipelineState.currentIdx || 0,
+    visible: !!pipelineState.visible
+  };
+}
+
+// Trailing-debounced wrapper around persistSessions; coalesces rapid mutations.
+var pipelinePersistTimer = null;
+function persistSessionsDebounced(projectKey, workspaceId) {
+  if (pipelinePersistTimer) clearTimeout(pipelinePersistTimer);
+  pipelinePersistTimer = setTimeout(function () {
+    pipelinePersistTimer = null;
+    persistSessions(projectKey, workspaceId);
+  }, 100);
+}
+
+// ============================================================
 // WebSocket
 // ============================================================
 
@@ -476,6 +562,7 @@ function connectWS() {
       reattachAllColumns();
     } else {
       wsHasConnectedBefore = true;
+      loadPipelines();
       loadProjects();
     }
   };
@@ -486,6 +573,43 @@ function connectWS() {
       var col = allColumns.get(msg.id);
       if (col) {
         col.terminal.write(msg.data);
+        // Pipeline plan-mode banner detection (run against raw data, pre-strip)
+        if (col.pipeline && PipelineMatcherAPI && typeof msg.data === 'string') {
+          var prevTail = col.bannerTail || '';
+          var chunk = prevTail + msg.data;
+          var bannerHit = PipelineMatcherAPI.PLAN_MODE_BANNER.test(chunk);
+          if (bannerHit) {
+            col.bannerEverMatched = true;
+            if (col.pipeline.flags && col.pipeline.flags.plan === true) {
+              // Banner re-render — refresh timestamp only; no reset, render, or persist.
+              col.pipeline.lastBannerSeenAt = Date.now();
+            } else {
+              // Restored-with-progress: first banner after restart should NOT wipe progress.
+              if (col.pipeline.restoredWithProgress) {
+                col.pipeline.flags.plan = true;
+                col.pipeline.lastBannerSeenAt = Date.now();
+                col.pipeline.bannerTail = '';
+                col.pipeline.restoredWithProgress = false;
+                col.pipeline.visible = true;
+              } else {
+                PipelineMatcherAPI.applyPlanEnter(col.pipeline, Date.now());
+              }
+              renderPipeline(msg.id);
+              persistSessions(col.projectKey, col.workspaceId);
+              startPipelineExitCheck(msg.id);
+            }
+            col.bannerTail = '';
+          } else {
+            col.bannerTail = chunk.slice(-64);
+          }
+          // Drift diagnostic: working state + "Plan" in tail but never matched.
+          if (!col.bannerDriftWarned && col.bannerEverMatched !== true &&
+              col.activityState === 'working' &&
+              col.bannerTail && col.bannerTail.indexOf('Plan') !== -1) {
+            console.warn('Pipeline visualizer: plan-mode-like activity detected but banner regex did not match. Claude Code may have changed its banner format.');
+            col.bannerDriftWarned = true;
+          }
+        }
           if (!resizeSuppressed.has(msg.id) && msg.data && col.hasUserInput) {
           // Detect Claude's input prompt: line starting with > or ❯ followed by cursor/space at end of chunk
           var trimmed = msg.data.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').trimEnd();
@@ -581,6 +705,95 @@ function wsSend(obj) {
 // ============================================================
 // Activity Pulse Tracking
 // ============================================================
+
+// TODO: DOM rendering not unit-tested — covered by manual e2e step 10
+function renderPipeline(id) {
+  var col = allColumns.get(id);
+  if (!col || !col.pipelineEl || !col.pipeline) return;
+  var pipeEl = col.pipelineEl;
+  // Toggle visibility class
+  if (col.pipeline.visible) pipeEl.classList.add('visible');
+  else pipeEl.classList.remove('visible');
+
+  // Compact mode based on header width
+  var compact = col.headerEl && col.headerEl.offsetWidth > 0 && col.headerEl.offsetWidth < 380;
+  if (compact) pipeEl.classList.add('compact');
+  else pipeEl.classList.remove('compact');
+
+  // Rebuild children
+  while (pipeEl.firstChild) pipeEl.removeChild(pipeEl.firstChild);
+
+  var steps = col.pipeline.steps || [];
+  var currentIdx = col.pipeline.currentIdx || 0;
+  for (var i = 0; i < steps.length; i++) {
+    var step = steps[i];
+    if (i > 0) {
+      var arrow = document.createElement('span');
+      arrow.className = 'pp-arrow';
+      arrow.textContent = '›';
+      pipeEl.appendChild(arrow);
+    }
+    var btn = document.createElement('button');
+    btn.className = 'pp-step';
+    btn.type = 'button';
+    btn.title = step.label;
+    if (step.id && step.id.indexOf('anchor-') === 0) btn.classList.add('pp-anchor');
+    var isCurrent = (i === currentIdx);
+    if (step.complete) btn.classList.add('pp-done');
+    else if (isCurrent) btn.classList.add('pp-current');
+    else btn.classList.add('pp-pending');
+    var labelText = step.label || '';
+    if (compact && !isCurrent && labelText.length > 0) {
+      btn.textContent = labelText.charAt(0).toUpperCase();
+    } else if (compact && isCurrent) {
+      btn.textContent = '▸ ' + labelText;
+    } else {
+      btn.textContent = labelText;
+    }
+    (function (idx) {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (!PipelineMatcherAPI) return;
+        var c = allColumns.get(id);
+        if (!c || !c.pipeline) return;
+        PipelineMatcherAPI.applyManualToggle(c.pipeline, idx);
+        renderPipeline(id);
+        persistSessionsDebounced(c.projectKey, c.workspaceId);
+      });
+    })(i);
+    pipeEl.appendChild(btn);
+  }
+}
+
+function startPipelineExitCheck(id) {
+  var col = allColumns.get(id);
+  if (!col || !col.pipeline || !PipelineMatcherAPI) return;
+  if (col.pipeline.exitCheckIntervalId != null) return;
+  col.pipeline.exitCheckIntervalId = setInterval(function () {
+    var c = allColumns.get(id);
+    if (!c || !c.pipeline) {
+      // Column gone — defensive
+      return;
+    }
+    if (PipelineMatcherAPI.shouldExitPlanMode(c.pipeline, Date.now())) {
+      PipelineMatcherAPI.applyPlanExit(c.pipeline);
+      renderPipeline(id);
+      persistSessions(c.projectKey, c.workspaceId);
+      if (c.pipeline.exitCheckIntervalId != null) {
+        clearInterval(c.pipeline.exitCheckIntervalId);
+        c.pipeline.exitCheckIntervalId = null;
+      }
+    }
+  }, 500);
+}
+
+function stopPipelineExitCheck(col) {
+  if (!col || !col.pipeline) return;
+  if (col.pipeline.exitCheckIntervalId != null) {
+    clearInterval(col.pipeline.exitCheckIntervalId);
+    col.pipeline.exitCheckIntervalId = null;
+  }
+}
 
 function setColumnActivity(id, state) {
   var col = allColumns.get(id);
@@ -736,6 +949,191 @@ function saveStartWithOS() {
   if (!window.electronAPI || !window.electronAPI.setStartWithOS) return;
   var enabled = document.getElementById('setting-start-with-os').checked;
   window.electronAPI.setStartWithOS(enabled);
+}
+
+function bindPipelineEditor() {
+  var editorEl = document.getElementById('pipeline-editor');
+  var addBtn = document.getElementById('btn-add-pipeline-step');
+  if (!editorEl || !addBtn) return;
+  if (!pipelinesConfig || !pipelinesConfig.pipeline || !Array.isArray(pipelinesConfig.pipeline.userSteps)) return;
+
+  var rows = editorEl.querySelectorAll('.pipeline-step-row:not(.pipeline-step-anchor)');
+  for (var r = 0; r < rows.length; r++) editorEl.removeChild(rows[r]);
+  var hints = editorEl.querySelectorAll('.settings-hint.error');
+  for (var h = 0; h < hints.length; h++) {
+    if (hints[h].id !== 'pipeline-editor-error') editorEl.removeChild(hints[h]);
+  }
+  var dupErrEl = document.getElementById('pipeline-editor-error');
+
+  var userSteps = pipelinesConfig.pipeline.userSteps;
+
+  function checkDuplicates() {
+    if (!dupErrEl) return;
+    var seen = {};
+    var dupes = {};
+    for (var i = 0; i < userSteps.length; i++) {
+      var kws = userSteps[i].keywords || [];
+      for (var k = 0; k < kws.length; k++) {
+        var tok = kws[k];
+        if (!tok) continue;
+        if (seen[tok] != null && seen[tok] !== i) dupes[tok] = true;
+        else if (seen[tok] == null) seen[tok] = i;
+      }
+    }
+    var dupList = Object.keys(dupes);
+    if (dupList.length > 0) {
+      dupErrEl.textContent = 'Duplicate keyword(s): ' + dupList.join(', ');
+      dupErrEl.style.display = '';
+    } else {
+      dupErrEl.textContent = '';
+      dupErrEl.style.display = 'none';
+    }
+  }
+
+  function renderRows() {
+    var existing = editorEl.querySelectorAll('.pipeline-step-row:not(.pipeline-step-anchor)');
+    for (var i = 0; i < existing.length; i++) editorEl.removeChild(existing[i]);
+    var stale = editorEl.querySelectorAll('.settings-hint.error');
+    for (var s = 0; s < stale.length; s++) {
+      if (stale[s].id !== 'pipeline-editor-error') editorEl.removeChild(stale[s]);
+    }
+
+    for (var idx = 0; idx < userSteps.length; idx++) {
+      (function (i) {
+        var step = userSteps[i];
+        var row = document.createElement('div');
+        row.className = 'pipeline-step-row';
+        row.setAttribute('data-step-idx', String(i));
+
+        var upBtn = document.createElement('button');
+        upBtn.className = 'pipeline-step-up';
+        upBtn.title = 'Move up';
+        upBtn.textContent = '↑';
+        if (i === 0) upBtn.disabled = true;
+        upBtn.addEventListener('click', function () {
+          if (i === 0) return;
+          var tmp = userSteps[i - 1];
+          userSteps[i - 1] = userSteps[i];
+          userSteps[i] = tmp;
+          savePipelines();
+          renderRows();
+          checkDuplicates();
+        });
+
+        var downBtn = document.createElement('button');
+        downBtn.className = 'pipeline-step-down';
+        downBtn.title = 'Move down';
+        downBtn.textContent = '↓';
+        if (i === userSteps.length - 1) downBtn.disabled = true;
+        downBtn.addEventListener('click', function () {
+          if (i === userSteps.length - 1) return;
+          var tmp = userSteps[i + 1];
+          userSteps[i + 1] = userSteps[i];
+          userSteps[i] = tmp;
+          savePipelines();
+          renderRows();
+          checkDuplicates();
+        });
+
+        var labelInput = document.createElement('input');
+        labelInput.className = 'settings-input pipeline-step-label';
+        labelInput.placeholder = 'Step name';
+        labelInput.maxLength = 24;
+        labelInput.value = step.label || '';
+
+        var kwInput = document.createElement('input');
+        kwInput.className = 'settings-input pipeline-step-keywords';
+        kwInput.placeholder = '/keyword (comma-separate for synonyms, e.g. /test, /check)';
+        kwInput.maxLength = 120;
+        kwInput.value = (step.keywords || []).join(', ');
+
+        var delBtn = document.createElement('button');
+        delBtn.className = 'pipeline-step-delete';
+        delBtn.title = 'Delete step';
+        delBtn.textContent = '×';
+        delBtn.addEventListener('click', function () {
+          userSteps.splice(i, 1);
+          savePipelines();
+          renderRows();
+          checkDuplicates();
+        });
+
+        function clearRowError() {
+          labelInput.classList.remove('error');
+          kwInput.classList.remove('error');
+          var sib = row.nextSibling;
+          if (sib && sib.classList && sib.classList.contains('settings-hint') && sib.classList.contains('error') && sib.id !== 'pipeline-editor-error') {
+            row.parentNode.removeChild(sib);
+          }
+        }
+
+        function showRowError(target, msg) {
+          target.classList.add('error');
+          var hint = document.createElement('div');
+          hint.className = 'settings-hint error';
+          hint.textContent = msg;
+          if (row.nextSibling) row.parentNode.insertBefore(hint, row.nextSibling);
+          else row.parentNode.appendChild(hint);
+        }
+
+        labelInput.addEventListener('change', function () {
+          clearRowError();
+          var v = labelInput.value.trim();
+          if (v.length === 0) {
+            showRowError(labelInput, 'Step name cannot be empty.');
+            labelInput.value = step.label || '';
+            return;
+          }
+          step.label = v;
+          savePipelines();
+          checkDuplicates();
+        });
+
+        kwInput.addEventListener('change', function () {
+          clearRowError();
+          var raw = kwInput.value.split(',');
+          var tokens = [];
+          for (var t = 0; t < raw.length; t++) {
+            var tok = raw[t].trim();
+            if (tok.length === 0) continue;
+            tokens.push(tok);
+          }
+          var pat = /^\/[a-z0-9-]+$/;
+          for (var t2 = 0; t2 < tokens.length; t2++) {
+            if (!pat.test(tokens[t2])) {
+              showRowError(kwInput, 'Keywords must look like /word (lowercase, digits, dashes).');
+              kwInput.value = (step.keywords || []).join(', ');
+              return;
+            }
+          }
+          step.keywords = tokens;
+          savePipelines();
+          checkDuplicates();
+        });
+
+        row.appendChild(upBtn);
+        row.appendChild(downBtn);
+        row.appendChild(labelInput);
+        row.appendChild(kwInput);
+        row.appendChild(delBtn);
+
+        if (dupErrEl && dupErrEl.parentNode === editorEl) editorEl.insertBefore(row, dupErrEl);
+        else editorEl.appendChild(row);
+      })(idx);
+    }
+  }
+
+  renderRows();
+  checkDuplicates();
+
+  var newAddBtn = addBtn.cloneNode(true);
+  addBtn.parentNode.replaceChild(newAddBtn, addBtn);
+  newAddBtn.addEventListener('click', function () {
+    userSteps.push({ id: 'step-' + Date.now(), label: '', keywords: [] });
+    savePipelines();
+    renderRows();
+    checkDuplicates();
+  });
 }
 
 function notifyAttentionNeeded(columnId) {
@@ -2132,7 +2530,8 @@ function restoreSessions(projectPath, workspaceId) {
             rowIdx: r,
             sessionId: lcol.sessionId,
             title: lcol.title || null,
-            widthRatio: (typeof lcol.widthRatio === 'number' && isFinite(lcol.widthRatio) && lcol.widthRatio > 0) ? lcol.widthRatio : null
+            widthRatio: (typeof lcol.widthRatio === 'number' && isFinite(lcol.widthRatio) && lcol.widthRatio > 0) ? lcol.widthRatio : null,
+            pipeline: lcol.pipeline || null
           });
         }
       }
@@ -2150,6 +2549,7 @@ function restoreSessions(projectPath, workspaceId) {
         var cwd = (typeof entry === 'object' && entry && typeof entry.cwd === 'string' && entry.cwd) ? entry.cwd : null;
         var pushedEntry = { rowIdx: rowIdx, sessionId: sid, title: title, widthRatio: widthRatio };
         if (cwd) pushedEntry.cwd = cwd;
+        if (typeof entry === 'object' && entry && entry.pipeline) pushedEntry.pipeline = entry.pipeline;
         entries.push(pushedEntry);
       }
       if (rowHeightRatios) {
@@ -2168,7 +2568,8 @@ function restoreSessions(projectPath, workspaceId) {
           rowIdx: 0,
           sessionId: bsid,
           title: (typeof bentry === 'object' && bentry && bentry.title) ? bentry.title : null,
-          widthRatio: null
+          widthRatio: null,
+          pipeline: (typeof bentry === 'object' && bentry && bentry.pipeline) ? bentry.pipeline : null
         });
       }
     }
@@ -2485,6 +2886,12 @@ function createColumnHeader(id, customTitle, opts) {
   header.appendChild(title);
   header.appendChild(actions);
 
+  if (!opts.isDiff) {
+    var pipelineDiv = document.createElement('div');
+    pipelineDiv.className = 'col-pipeline';
+    header.appendChild(pipelineDiv);
+  }
+
   if (!popoutMode && !opts.isDiff) {
     header.addEventListener('contextmenu', function (e) {
       if (header.querySelector('[contenteditable="true"]')) return;
@@ -2581,6 +2988,23 @@ function showColumnContextMenu(colId, x, y) {
     e.stopPropagation();
     openSubmenu();
   });
+
+  var hasPipeProgress = !!(col.pipeline && (col.pipeline.steps.some(function (s) { return s.complete; }) || (col.pipeline.flags && col.pipeline.flags.plan)));
+  if (hasPipeProgress) {
+    var pipeItem = document.createElement('div');
+    pipeItem.className = 'project-context-item';
+    pipeItem.textContent = col.pipeline.visible ? 'Hide pipeline' : 'Show pipeline';
+    pipeItem.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      var c = allColumns.get(colId);
+      if (!c || !c.pipeline) { closeAll(); return; }
+      c.pipeline.visible = !c.pipeline.visible;
+      renderPipeline(colId);
+      persistSessions(c.projectKey, c.workspaceId);
+      closeAll();
+    });
+    menu.appendChild(pipeItem);
+  }
 
   document.body.appendChild(menu);
 
@@ -2902,6 +3326,13 @@ function addColumn(args, targetRow, opts) {
         if (existingIdx !== -1) c.recentCommands.splice(existingIdx, 1);
         c.recentCommands.push(cmd);
         while (c.recentCommands.length > 5) c.recentCommands.shift();
+        if (c.pipeline && PipelineMatcherAPI) {
+          var advanced = PipelineMatcherAPI.applyKeywordMatch(c.pipeline, cmd, pipelinesConfig);
+          if (advanced) {
+            renderPipeline(id);
+            persistSessionsDebounced(c.projectKey, c.workspaceId);
+          }
+        }
         continue;
       }
       if (ch === '\x7f' || ch === '\b') {
@@ -2970,8 +3401,34 @@ function addColumn(args, targetRow, opts) {
     hasUserInput: false,
     notified: false,
     recentCommands: [],
-    commandBuffer: ''
+    commandBuffer: '',
+    pipeline: buildPipelineState(opts.pipelineState || null),
+    pipelineEl: header.querySelector('.col-pipeline'),
+    pipelineResizeObserver: null,
+    bannerTail: '',
+    bannerEverMatched: false,
+    bannerDriftWarned: false
   };
+
+  // Wire up ResizeObserver for compact-mode toggling on the pipeline strip.
+  if (colData.pipelineEl && typeof ResizeObserver === 'function') {
+    var lastCompact = null;
+    var ro = new ResizeObserver(function () {
+      var w = header.offsetWidth;
+      var nowCompact = w > 0 && w < 380;
+      if (nowCompact !== lastCompact) {
+        lastCompact = nowCompact;
+        renderPipeline(id);
+      }
+    });
+    ro.observe(header);
+    colData.pipelineResizeObserver = ro;
+  }
+
+  // If restored with progress, render immediately so pills appear before banner re-detected.
+  if (colData.pipeline && colData.pipeline.visible) {
+    setTimeout(function () { renderPipeline(id); }, 0);
+  }
 
   row.columnIds.push(id);
   state.columns.set(id, colData);
@@ -3703,6 +4160,10 @@ function persistSessions(projectKey, workspaceId) {
           widthRatio: widthRatio
         };
         if (col2.cwd && col2.cwd !== activeProjectKey) entry.cwd = col2.cwd;
+        if (col2.pipeline) {
+          var serializedPipe = serializePipeline(col2.pipeline);
+          if (serializedPipe) entry.pipeline = serializedPipe;
+        }
         rowEntries.push(entry);
       }
 
@@ -3758,6 +4219,11 @@ function removeColumn(id) {
   if (timer) clearTimeout(timer);
   activityTimers.delete(id);
   stopSessionSync(id);
+  stopPipelineExitCheck(col);
+  if (col.pipelineResizeObserver) {
+    try { col.pipelineResizeObserver.disconnect(); } catch (e) { /* ignore */ }
+    col.pipelineResizeObserver = null;
+  }
 
   if (!col.isDiff) wsSend({ type: 'kill', id: id });
 
@@ -7027,6 +7493,7 @@ var settingsModal = document.getElementById('settings-modal');
 document.getElementById('btn-settings').addEventListener('click', function () {
   loadNotifSettings();
   loadStartWithOS();
+  bindPipelineEditor();
   window.electronAPI.getAutomationSettings().then(function (settings) {
     document.getElementById('setting-agent-repos-dir').value = settings.agentReposBaseDir || '';
   });

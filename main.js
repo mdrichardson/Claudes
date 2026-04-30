@@ -28,6 +28,8 @@ const LOOPS_RUNS_DIR = path.join(CONFIG_DIR, app.isPackaged ? 'loop-runs' : 'loo
 const AUTOMATIONS_FILE = path.join(CONFIG_DIR, app.isPackaged ? 'automations.json' : 'automations-dev.json');
 const AUTOMATIONS_RUNS_DIR = path.join(CONFIG_DIR, app.isPackaged ? 'automation-runs' : 'automation-runs-dev');
 const AGENTS_DIR_DEFAULT = path.join(CONFIG_DIR, app.isPackaged ? 'agents' : 'agents-dev');
+const PIPELINES_FILE = path.join(CONFIG_DIR, app.isPackaged ? 'pipelines.json' : 'pipelines-dev.json');
+const DEFAULT_PIPELINES = { version: 1, pipeline: { id: 'default', name: 'Default workflow', userSteps: [] } };
 
 // --- Config ---
 
@@ -525,6 +527,42 @@ ipcMain.handle('config:getProjects', () => {
 
 ipcMain.handle('config:saveProjects', (event, config) => {
   scheduleWriteConfig(config);
+});
+
+ipcMain.handle('pipelines:get', () => {
+  ensureConfigDir();
+  try {
+    const raw = fs.readFileSync(PIPELINES_FILE, 'utf8');
+    const data = JSON.parse(raw);
+    if (data && typeof data === 'object' && data.pipeline && Array.isArray(data.pipeline.userSteps)) {
+      return data;
+    }
+  } catch (e) { /* file missing, parse error, wrong shape */ }
+  return DEFAULT_PIPELINES;
+});
+
+ipcMain.handle('pipelines:save', (event, data) => {
+  ensureConfigDir();
+  // Pass-through unknown top-level fields (forward compat); ensure shape on key fields.
+  const incoming = (data && typeof data === 'object') ? data : {};
+  const pipeline = (incoming.pipeline && typeof incoming.pipeline === 'object')
+    ? incoming.pipeline
+    : { id: 'default', name: 'Default workflow', userSteps: [] };
+  const userSteps = Array.isArray(pipeline.userSteps) ? pipeline.userSteps : [];
+  const payload = {
+    ...incoming,
+    version: typeof incoming.version === 'number' ? incoming.version : 1,
+    pipeline: {
+      ...pipeline,
+      id: pipeline.id || 'default',
+      name: pipeline.name || 'Default workflow',
+      userSteps: userSteps
+    }
+  };
+  const tmp = PIPELINES_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8');
+  fs.renameSync(tmp, PIPELINES_FILE);
+  return true;
 });
 
 ipcMain.handle('popout:setTransfer', (event, projectKey, transferList) => {
