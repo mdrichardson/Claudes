@@ -7,6 +7,7 @@ const { spawn, execFile, execFileSync } = require('child_process');
 const http = require('http');
 const { resolveWorktreeCandidates, pathIsDirectory } = require('./lib/path-utils');
 const { findLastGitBranch } = require('./lib/session-branch');
+const { detectActiveWorktree } = require('./lib/worktree-detect');
 
 // Set appUserModelId early so Windows uses a consistent taskbar icon across restarts
 app.setAppUserModelId('com.thecodeguy.claudes');
@@ -769,6 +770,34 @@ ipcMain.handle('git:detectSessionBranch', (event, projectPath, sessionId) => {
     } finally {
       fs.closeSync(fd);
     }
+  } catch {
+    return null;
+  }
+});
+
+// Phase 3: detect which worktree the session is actively working in by
+// scanning the JSONL tail for `cd <path>` commands and `"file_path":"..."`
+// entries. The Claude CLI's recorded gitBranch reflects ITS own cwd (project
+// root) — useless for sessions that do their work via Bash `cd worktree && ...`.
+ipcMain.handle('git:detectSessionWorktree', async (event, projectPath, sessionId) => {
+  if (!projectPath || !sessionId) return null;
+  try {
+    const claudeKey = projectPathToClaudeKey(projectPath);
+    const jsonlPath = path.join(os.homedir(), '.claude', 'projects', claudeKey, sessionId + '.jsonl');
+    const stat = fs.statSync(jsonlPath);
+    const tailSize = Math.min(stat.size, 512 * 1024);
+    if (tailSize === 0) return null;
+    const fd = fs.openSync(jsonlPath, 'r');
+    let content;
+    try {
+      const buf = Buffer.alloc(tailSize);
+      fs.readSync(fd, buf, 0, tailSize, stat.size - tailSize);
+      content = buf.toString('utf8');
+    } finally {
+      fs.closeSync(fd);
+    }
+    const worktrees = await listGitWorktrees(projectPath);
+    return detectActiveWorktree(content, worktrees);
   } catch {
     return null;
   }
