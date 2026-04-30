@@ -1546,6 +1546,7 @@ function prepareAndPopOut(projectPath) {
         cols: col.terminal ? col.terminal.cols : 120,
         rows: col.terminal ? col.terminal.rows : 30,
         cwd: col.cwd || projectPath,
+        cwdSource: col.cwdSource || null,
         cmd: col.cmd || null,
         cmdArgs: col.cmdArgs || [],
         env: col.env || null,
@@ -1582,6 +1583,7 @@ window.collectPopoutTransferForClose = function () {
       cols: col.terminal ? col.terminal.cols : 120,
       rows: col.terminal ? col.terminal.rows : 30,
       cwd: col.cwd || popoutProjectKey,
+      cwdSource: col.cwdSource || null,
       cmd: col.cmd || null,
       cmdArgs: col.cmdArgs || [],
       env: col.env || null,
@@ -1616,6 +1618,7 @@ function applyTransferredColumns(projIdx, transfer) {
       cmd: entry.cmd,
       env: entry.env,
       cwd: entry.cwd,
+      cwdSource: entry.cwdSource || null,
       isDiff: entry.isDiff,
       workspaceId: null // popouts are Primary-only
     });
@@ -2531,9 +2534,11 @@ function restoreSessions(projectPath, workspaceId) {
         var widthRatio = (typeof entry === 'object' && entry && typeof entry.widthRatio === 'number' && isFinite(entry.widthRatio) && entry.widthRatio > 0) ? entry.widthRatio : null;
         var title = (typeof entry === 'object' && entry && entry.title) ? entry.title : null;
         var cwd = (typeof entry === 'object' && entry && typeof entry.cwd === 'string' && entry.cwd) ? entry.cwd : null;
+        var cwdSource = (typeof entry === 'object' && entry && typeof entry.cwdSource === 'string' && entry.cwdSource) ? entry.cwdSource : null;
         var targetBranch = (typeof entry === 'object' && entry && typeof entry.targetBranch === 'string' && entry.targetBranch) ? entry.targetBranch : null;
         var pushedEntry = { rowIdx: rowIdx, sessionId: sid, title: title, widthRatio: widthRatio };
         if (cwd) pushedEntry.cwd = cwd;
+        if (cwdSource) pushedEntry.cwdSource = cwdSource;
         if (targetBranch) pushedEntry.targetBranch = targetBranch;
         if (typeof entry === 'object' && entry && entry.pipeline) pushedEntry.pipeline = entry.pipeline;
         entries.push(pushedEntry);
@@ -2587,6 +2592,7 @@ function restoreSessions(projectPath, workspaceId) {
           var stillExists = await window.electronAPI.pathExists(e.cwd);
           if (stillExists) {
             rowOpts.cwd = e.cwd;
+            if (e.cwdSource) rowOpts.cwdSource = e.cwdSource;
           } else {
             console.warn("Column '" + (e.title || e.sessionId) + "' had cwd " + e.cwd + " which no longer exists; restored at project root.");
           }
@@ -3335,6 +3341,7 @@ function addColumn(args, targetRow, opts) {
     fitAddon: fitAddon,
     headerEl: header,
     cwd: cwd,
+    cwdSource: opts.cwdSource || null,
     targetBranch: opts.targetBranch || null,
     projectKey: activeProjectKey,
     // Stamp the workspaceId so later persist/restore/focus-flow can route to
@@ -3974,8 +3981,13 @@ function startSessionSync(columnId, projectPath) {
 
       if (currentEntry) {
         // Current session file still exists. Only consider a reassignment if
-        // THIS column has had recent input AND there's a newer unclaimed file.
-        if (hasRecentInput) {
+        // THIS column has had recent input AND its CURRENT jsonl is dormant
+        // (Claude has moved on — e.g. via /clear which started a new file).
+        // Without the dormancy guard, two concurrently-active columns can race
+        // for a newer unclaimed sessionId and end up swapping titles.
+        var currentJsonlAgeMs = now - (currentEntry.modified || 0);
+        var currentIsDormant = currentJsonlAgeMs > 10000;
+        if (hasRecentInput && currentIsDormant) {
           for (var i = 0; i < sessions.length; i++) {
             var s = sessions[i];
             if (s.sessionId === col2.sessionId) break; // nothing newer than current
@@ -4117,6 +4129,7 @@ function persistSessions(projectKey, workspaceId) {
           widthRatio: widthRatio
         };
         if (col2.cwd && col2.cwd !== activeProjectKey) entry.cwd = col2.cwd;
+        if (col2.cwdSource) entry.cwdSource = col2.cwdSource;
         if (col2.targetBranch) entry.targetBranch = col2.targetBranch;
         if (col2.pipeline) {
           var serializedPipe = PipelineMatcherAPI.serializePipeline(col2.pipeline);
@@ -5264,31 +5277,58 @@ function invalidateProjectRootBranch(projectKey) {
 function autoBindColumnTarget(colId) {
   var col = allColumns.get(colId);
   if (!col || !col.sessionId || !col.projectKey) return Promise.resolve();
-  // Skip auto-bind for columns explicitly bound to a non-project-root cwd —
-  // their cwd is the source of truth (Phase 1 worktree column behavior).
-  if (col.cwd && col.cwd !== col.projectKey) return Promise.resolve();
+  // Skip auto-bind only when the user explicitly bound this column's cwd via
+  // the spawn modal (Phase 1 manual). Phase 3 'auto-worktree' bindings remain
+  // eligible for re-detection so a session that switches worktrees gets retracked.
+  if (col.cwdSource === 'manual') return Promise.resolve();
 
-  return window.electronAPI.gitDetectSessionBranch(col.projectKey, col.sessionId).then(function (sessionBranch) {
-    if (!sessionBranch) {
-      if (col.targetBranch !== null) {
-        col.targetBranch = null;
-        persistSessions(col.projectKey, col.workspaceId);
-      }
+  // Phase 3: try worktree detection from JSONL evidence first. When found,
+  // pin col.cwd to the worktree path so the Git tab targets it directly with
+  // full read+write functionality (the worktree HAS that branch checked out).
+  return window.electronAPI.gitDetectSessionWorktree(col.projectKey, col.sessionId).then(function (worktree) {
+    if (worktree && worktree.path) {
+      var newCwd = worktree.path;
+      var changed = false;
+      if (col.cwd !== newCwd) { col.cwd = newCwd; changed = true; }
+      if (col.cwdSource !== 'auto-worktree') { col.cwdSource = 'auto-worktree'; changed = true; }
+      // Phase 1 cwd binding handles branch via the worktree's HEAD —
+      // clear any Phase 2 read-only branch override.
+      if (col.targetBranch !== null) { col.targetBranch = null; changed = true; }
+      if (changed) persistSessions(col.projectKey, col.workspaceId);
       return;
     }
-    return getProjectRootBranch(col.projectKey).then(function (rootBranch) {
-      // If session's branch matches the project root's current branch, no override needed.
-      if (sessionBranch === rootBranch) {
+
+    // No dominant worktree detected. Fall back to Phase 2 branch detection.
+    // If a previous run pinned this column to an auto-worktree but evidence
+    // is now gone, release back to project root so we don't stay stuck.
+    if (col.cwdSource === 'auto-worktree') {
+      col.cwd = col.projectKey;
+      col.cwdSource = undefined;
+      persistSessions(col.projectKey, col.workspaceId);
+    }
+
+    return window.electronAPI.gitDetectSessionBranch(col.projectKey, col.sessionId).then(function (sessionBranch) {
+      if (!sessionBranch) {
         if (col.targetBranch !== null) {
           col.targetBranch = null;
           persistSessions(col.projectKey, col.workspaceId);
         }
         return;
       }
-      if (col.targetBranch !== sessionBranch) {
-        col.targetBranch = sessionBranch;
-        persistSessions(col.projectKey, col.workspaceId);
-      }
+      return getProjectRootBranch(col.projectKey).then(function (rootBranch) {
+        // If session's branch matches the project root's current branch, no override needed.
+        if (sessionBranch === rootBranch) {
+          if (col.targetBranch !== null) {
+            col.targetBranch = null;
+            persistSessions(col.projectKey, col.workspaceId);
+          }
+          return;
+        }
+        if (col.targetBranch !== sessionBranch) {
+          col.targetBranch = sessionBranch;
+          persistSessions(col.projectKey, col.workspaceId);
+        }
+      });
     });
   }).catch(function () { /* best-effort */ });
 }
@@ -7282,6 +7322,7 @@ btnAdd.addEventListener('click', async function () {
     var spawnOpts = {};
     if (resolved.kind === 'cwd') {
       spawnOpts.cwd = resolved.path;
+      spawnOpts.cwdSource = 'manual';
     }
     var args = buildSpawnArgs(resolved);
     addColumn(args.length > 0 ? args : null, null, spawnOpts);
