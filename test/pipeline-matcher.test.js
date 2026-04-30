@@ -227,6 +227,38 @@ test('applyPlanExit: sets flags.plan false, marks anchor-plan complete, advances
   assert.strictEqual(state.currentIdx, execIdx);
 });
 
+test('applyPlanEnter: finds anchor-plan by id when not at index 0', () => {
+  const state = makeState({
+    steps: [
+      { id: 'step-foo',       label: 'Foo',     complete: false },
+      { id: 'anchor-plan',    label: 'Plan',    complete: false },
+      { id: 'anchor-execute', label: 'Execute', complete: false },
+      { id: 'step-bar',       label: 'Bar',     complete: false },
+    ],
+    flags: { plan: false },
+  });
+  const result = applyPlanEnter(state, 1234);
+  assert.strictEqual(result, true);
+  assert.strictEqual(state.currentIdx, 1);
+});
+
+test('applyPlanExit: marks anchor-plan complete by id (not index 0) and advances to anchor-execute', () => {
+  const state = makeState({
+    steps: [
+      { id: 'step-foo',       label: 'Foo',     complete: false },
+      { id: 'anchor-plan',    label: 'Plan',    complete: false },
+      { id: 'anchor-execute', label: 'Execute', complete: false },
+      { id: 'step-bar',       label: 'Bar',     complete: false },
+    ],
+    flags: { plan: true },
+  });
+  const result = applyPlanExit(state);
+  assert.strictEqual(result, true);
+  assert.strictEqual(state.steps[1].complete, true);
+  assert.strictEqual(state.steps[0].complete, false);
+  assert.strictEqual(state.currentIdx, 2);
+});
+
 // ---------------------------------------------------------------------------
 // 8. applyKeywordMatch
 // ---------------------------------------------------------------------------

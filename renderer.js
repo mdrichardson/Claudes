@@ -485,16 +485,27 @@ function savePipelines() {
 }
 
 function resolveSteps(cfg) {
-  var steps = [
-    { id: 'anchor-plan', label: 'Plan', complete: false },
-    { id: 'anchor-execute', label: 'Execute', complete: false }
-  ];
+  var steps = [];
   if (cfg && cfg.pipeline && Array.isArray(cfg.pipeline.userSteps)) {
     for (var i = 0; i < cfg.pipeline.userSteps.length; i++) {
       var us = cfg.pipeline.userSteps[i];
       if (!us || !us.id || !us.label) continue;
       steps.push({ id: us.id, label: us.label, complete: false });
     }
+  }
+  var hasPlan = false;
+  var hasExec = false;
+  for (var j = 0; j < steps.length; j++) {
+    if (steps[j].id === 'anchor-plan') hasPlan = true;
+    if (steps[j].id === 'anchor-execute') hasExec = true;
+  }
+  if (!hasPlan) steps.unshift({ id: 'anchor-plan', label: 'Plan', complete: false });
+  if (!hasExec) {
+    var pIdx = -1;
+    for (var k = 0; k < steps.length; k++) {
+      if (steps[k].id === 'anchor-plan') { pIdx = k; break; }
+    }
+    steps.splice(pIdx + 1, 0, { id: 'anchor-execute', label: 'Execute', complete: false });
   }
   return steps;
 }
@@ -917,15 +928,14 @@ function bindPipelineEditor() {
   if (!editorEl || !addBtn) return;
   if (!pipelinesConfig || !pipelinesConfig.pipeline || !Array.isArray(pipelinesConfig.pipeline.userSteps)) return;
 
-  var rows = editorEl.querySelectorAll('.pipeline-step-row:not(.pipeline-step-anchor)');
-  for (var r = 0; r < rows.length; r++) editorEl.removeChild(rows[r]);
-  var hints = editorEl.querySelectorAll('.settings-hint.error');
-  for (var h = 0; h < hints.length; h++) {
-    if (hints[h].id !== 'pipeline-editor-error') editorEl.removeChild(hints[h]);
-  }
+  while (editorEl.firstChild) editorEl.removeChild(editorEl.firstChild);
   var dupErrEl = document.getElementById('pipeline-editor-error');
 
   var userSteps = pipelinesConfig.pipeline.userSteps;
+
+  function isAnchor(step) {
+    return !!(step && typeof step.id === 'string' && step.id.indexOf('anchor-') === 0);
+  }
 
   function checkDuplicates() {
     if (!dupErrEl) return;
@@ -951,7 +961,7 @@ function bindPipelineEditor() {
   }
 
   function renderRows() {
-    var existing = editorEl.querySelectorAll('.pipeline-step-row:not(.pipeline-step-anchor)');
+    var existing = editorEl.querySelectorAll('.pipeline-step-row');
     for (var i = 0; i < existing.length; i++) editorEl.removeChild(existing[i]);
     var stale = editorEl.querySelectorAll('.settings-hint.error');
     for (var s = 0; s < stale.length; s++) {
@@ -961,8 +971,9 @@ function bindPipelineEditor() {
     for (var idx = 0; idx < userSteps.length; idx++) {
       (function (i) {
         var step = userSteps[i];
+        var anchor = isAnchor(step);
         var row = document.createElement('div');
-        row.className = 'pipeline-step-row';
+        row.className = 'pipeline-step-row' + (anchor ? ' pipeline-step-anchor' : '');
         row.setAttribute('data-step-idx', String(i));
 
         var upBtn = document.createElement('button');
@@ -1000,23 +1011,21 @@ function bindPipelineEditor() {
         labelInput.placeholder = 'Step name';
         labelInput.maxLength = 24;
         labelInput.value = step.label || '';
+        if (anchor) labelInput.disabled = true;
 
         var kwInput = document.createElement('input');
         kwInput.className = 'settings-input pipeline-step-keywords';
-        kwInput.placeholder = '/keyword (comma-separate for synonyms, e.g. /test, /check)';
-        kwInput.maxLength = 120;
-        kwInput.value = (step.keywords || []).join(', ');
-
-        var delBtn = document.createElement('button');
-        delBtn.className = 'pipeline-step-delete';
-        delBtn.title = 'Delete step';
-        delBtn.textContent = '×';
-        delBtn.addEventListener('click', function () {
-          userSteps.splice(i, 1);
-          savePipelines();
-          renderRows();
-          checkDuplicates();
-        });
+        if (anchor) {
+          kwInput.placeholder = step.id === 'anchor-plan'
+            ? '(auto: Plan-mode entry)'
+            : '(auto: Plan-mode exit)';
+          kwInput.value = '';
+          kwInput.disabled = true;
+        } else {
+          kwInput.placeholder = 'keyword (comma-separate for synonyms, e.g. /test, build)';
+          kwInput.maxLength = 120;
+          kwInput.value = (step.keywords || []).join(', ');
+        }
 
         function clearRowError() {
           labelInput.classList.remove('error');
@@ -1036,46 +1045,59 @@ function bindPipelineEditor() {
           else row.parentNode.appendChild(hint);
         }
 
-        labelInput.addEventListener('change', function () {
-          clearRowError();
-          var v = labelInput.value.trim();
-          if (v.length === 0) {
-            showRowError(labelInput, 'Step name cannot be empty.');
-            labelInput.value = step.label || '';
-            return;
-          }
-          step.label = v;
-          savePipelines();
-          checkDuplicates();
-        });
-
-        kwInput.addEventListener('change', function () {
-          clearRowError();
-          var raw = kwInput.value.split(',');
-          var tokens = [];
-          for (var t = 0; t < raw.length; t++) {
-            var tok = raw[t].trim();
-            if (tok.length === 0) continue;
-            tokens.push(tok);
-          }
-          var pat = /^\/[a-z0-9-]+$/;
-          for (var t2 = 0; t2 < tokens.length; t2++) {
-            if (!pat.test(tokens[t2])) {
-              showRowError(kwInput, 'Keywords must look like /word (lowercase, digits, dashes).');
-              kwInput.value = (step.keywords || []).join(', ');
+        if (!anchor) {
+          labelInput.addEventListener('change', function () {
+            clearRowError();
+            var v = labelInput.value.trim();
+            if (v.length === 0) {
+              showRowError(labelInput, 'Step name cannot be empty.');
+              labelInput.value = step.label || '';
               return;
             }
-          }
-          step.keywords = tokens;
-          savePipelines();
-          checkDuplicates();
-        });
+            step.label = v;
+            savePipelines();
+            checkDuplicates();
+          });
+
+          kwInput.addEventListener('change', function () {
+            clearRowError();
+            var raw = kwInput.value.split(',');
+            var tokens = [];
+            for (var t = 0; t < raw.length; t++) {
+              var tok = raw[t].trim();
+              if (tok.length === 0) continue;
+              if (tok.indexOf(',') !== -1) {
+                showRowError(kwInput, 'Keywords cannot contain commas.');
+                kwInput.value = (step.keywords || []).join(', ');
+                return;
+              }
+              tokens.push(tok);
+            }
+            step.keywords = tokens;
+            savePipelines();
+            checkDuplicates();
+          });
+        }
 
         row.appendChild(upBtn);
         row.appendChild(downBtn);
         row.appendChild(labelInput);
         row.appendChild(kwInput);
-        row.appendChild(delBtn);
+
+        if (!anchor) {
+          var delBtn = document.createElement('button');
+          delBtn.className = 'pipeline-step-delete';
+          delBtn.title = 'Delete step';
+          delBtn.textContent = '×';
+          delBtn.addEventListener('click', function () {
+            if (isAnchor(userSteps[i])) return;
+            userSteps.splice(i, 1);
+            savePipelines();
+            renderRows();
+            checkDuplicates();
+          });
+          row.appendChild(delBtn);
+        }
 
         if (dupErrEl && dupErrEl.parentNode === editorEl) editorEl.insertBefore(row, dupErrEl);
         else editorEl.appendChild(row);
