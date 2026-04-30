@@ -6185,6 +6185,7 @@ function gitCheckout(branchName) {
   window.electronAPI.gitCheckout(gitTargetCwd(), branchName).then(function (result) {
     if (result.success) {
       showGitStatus('Switched to ' + branchName);
+      invalidateProjectRootBranch(activeProjectKey);
       refreshGitStatus(true);
     } else {
       showGitStatus('Checkout failed: ' + result.error, true);
@@ -6198,6 +6199,7 @@ function gitCreateBranch(branchName) {
   window.electronAPI.gitCreateBranch(gitTargetCwd(), branchName).then(function (result) {
     if (result.success) {
       showGitStatus('Created and switched to ' + branchName);
+      invalidateProjectRootBranch(activeProjectKey);
       refreshGitStatus(true);
     } else {
       showGitStatus('Create branch failed: ' + result.error, true);
