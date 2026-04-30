@@ -56,6 +56,7 @@ Can also be run manually: `./release.sh [major|minor|patch|x.y.z]`
   { "sessions": [ ... ], "workspaces": { "<ws id>": { "sessions": [ ... ] } } }
   ```
   Primary's columns live in the top-level `sessions` array; each sub-workspace's columns live under `workspaces.<id>.sessions`. Legacy files with just `{ "sessions": [...] }` are read as Primary with an implicit empty `workspaces: {}`; the first save upgrades the shape. Writes are atomic (tmp + rename).
+- Each per-column session entry optionally carries a `cwd` field — the working directory the column was spawned in. Omitted when equal to the project root, so existing files without `cwd` keep working unchanged. On restore, missing-on-disk values fall back to project root with a console warning (handled via `electronAPI.pathExists` pre-flight).
 - Claude sessions detected by scanning `~/.claude/projects/<path-key>/` for `.jsonl` files
 
 <!-- aidp-orchestrator-start -->

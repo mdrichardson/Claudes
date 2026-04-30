@@ -2093,7 +2093,7 @@ function setActiveWorkspace(projectIndex, workspaceId, isStartup) {
 }
 
 function restoreSessions(projectPath, workspaceId) {
-  window.electronAPI.loadSessions(projectPath).then(function (blob) {
+  window.electronAPI.loadSessions(projectPath).then(async function (blob) {
     var spawnArgs = buildSpawnArgs();
     var state = projectStates.get(stateKey(projectPath, workspaceId));
 
@@ -2147,7 +2147,10 @@ function restoreSessions(projectPath, workspaceId) {
         var rowIdx = (typeof entry === 'object' && entry && typeof entry.rowIdx === 'number' && isFinite(entry.rowIdx)) ? entry.rowIdx : 0;
         var widthRatio = (typeof entry === 'object' && entry && typeof entry.widthRatio === 'number' && isFinite(entry.widthRatio) && entry.widthRatio > 0) ? entry.widthRatio : null;
         var title = (typeof entry === 'object' && entry && entry.title) ? entry.title : null;
-        entries.push({ rowIdx: rowIdx, sessionId: sid, title: title, widthRatio: widthRatio });
+        var cwd = (typeof entry === 'object' && entry && typeof entry.cwd === 'string' && entry.cwd) ? entry.cwd : null;
+        var pushedEntry = { rowIdx: rowIdx, sessionId: sid, title: title, widthRatio: widthRatio };
+        if (cwd) pushedEntry.cwd = cwd;
+        entries.push(pushedEntry);
       }
       if (rowHeightRatios) {
         for (var rh = 0; rh < rowHeightRatios.length; rh++) {
@@ -2193,6 +2196,14 @@ function restoreSessions(projectPath, workspaceId) {
         }
         var rowOpts = { workspaceId: workspaceId };
         if (e.title) rowOpts.title = e.title;
+        if (e.cwd) {
+          var stillExists = await window.electronAPI.pathExists(e.cwd);
+          if (stillExists) {
+            rowOpts.cwd = e.cwd;
+          } else {
+            console.warn("Column '" + (e.title || e.sessionId) + "' had cwd " + e.cwd + " which no longer exists; restored at project root.");
+          }
+        }
         addColumn(spawnArgs.concat(['--resume', e.sessionId]), targetRow, rowOpts);
       }
 
@@ -3121,7 +3132,7 @@ function addDiffColumn(diffData, opts) {
     diffData: diffData,
     diffMode: 'unified',
     headerEl: header,
-    cwd: activeProjectKey,
+    cwd: opts.cwd || gitTargetCwd(),
     projectKey: activeProjectKey,
     customTitle: title,
     createdAt: Date.now()
@@ -3159,7 +3170,7 @@ function addDiffColumn(diffData, opts) {
 
 function loadWorkingDiff(diffBody, colData) {
   diffBody.textContent = 'Loading...';
-  window.electronAPI.gitDiff(activeProjectKey, colData.diffData.filePath, colData.diffData.staged || false).then(function (text) {
+  window.electronAPI.gitDiff(colData.cwd, colData.diffData.filePath, colData.diffData.staged || false).then(function (text) {
     colData.diffData.diffText = text;
     colData.diffData.parsed = parseDiff(text);
     renderDiffContent(diffBody, colData);
@@ -3171,14 +3182,14 @@ function loadCommitDiff(diffBody, colData) {
   var hash = colData.diffData.commitHash;
 
   if (colData.diffData.filePath) {
-    window.electronAPI.gitDiffCommit(activeProjectKey, hash, colData.diffData.filePath).then(function (text) {
+    window.electronAPI.gitDiffCommit(colData.cwd, hash, colData.diffData.filePath).then(function (text) {
       colData.diffData.diffText = text;
       colData.diffData.parsed = parseDiff(text);
       renderDiffContent(diffBody, colData);
     });
   } else {
     // Full commit — show file list first, click to view individual diffs
-    window.electronAPI.gitCommitDetail(activeProjectKey, hash).then(function (detail) {
+    window.electronAPI.gitCommitDetail(colData.cwd, hash).then(function (detail) {
       colData.diffData.commitDetail = detail;
       colData.diffData.files = detail.files || [];
       renderCommitFileList(diffBody, colData);
@@ -3230,7 +3241,7 @@ function renderCommitFileList(diffBody, colData) {
           commitHash: colData.diffData.commitHash,
           filePath: fileInfo.file,
           status: 'M'
-        }, { title: fileInfo.file.split('/').pop() });
+        }, { title: fileInfo.file.split('/').pop(), cwd: colData.cwd });
       });
 
       var nameEl = document.createElement('span');
@@ -3303,7 +3314,7 @@ function renderDiffContent(diffBody, colData) {
         tab.addEventListener('click', function () {
           colData.diffData.activeFile = fileInfo.file;
           diffBody.textContent = 'Loading...';
-          window.electronAPI.gitDiffCommit(activeProjectKey, colData.diffData.commitHash, fileInfo.file).then(function (text) {
+          window.electronAPI.gitDiffCommit(colData.cwd, colData.diffData.commitHash, fileInfo.file).then(function (text) {
             colData.diffData.diffText = text;
             colData.diffData.parsed = parseDiff(text);
             renderDiffContent(diffBody, colData);
@@ -3685,12 +3696,14 @@ function persistSessions(projectKey, workspaceId) {
         if (!col2 || !col2.sessionId) continue;
         var widthRatio = colWidths[c2] / totalColWidth;
         if (!hidden) col2.lastWidthRatio = widthRatio;
-        rowEntries.push({
+        var entry = {
           sessionId: col2.sessionId,
           title: col2.customTitle || null,
           rowIdx: compactRowIdx,
           widthRatio: widthRatio
-        });
+        };
+        if (col2.cwd && col2.cwd !== activeProjectKey) entry.cwd = col2.cwd;
+        rowEntries.push(entry);
       }
 
       var heightRatio = rowHeights[r2] / totalRowHeight;
@@ -3951,6 +3964,12 @@ function setFocusedColumn(id) {
     }
     var item = projectListEl.querySelector(sel);
     if (item) item.classList.remove('attention-flash');
+  }
+
+  invalidatePathExists(gitTargetCwd());
+  if (isGitTabActive()) {
+    refreshGitStatus(true);
+    updateGitTargetIndicator();
   }
 }
 
@@ -4866,40 +4885,134 @@ var lastGitRaw = null;
 var graphLaneState = null;
 var gitPollInFlight = false;
 
+function gitTargetCwd() {
+  return window.GitTarget.getGitTargetCwd(getActiveState(), allColumns, activeProjectKey);
+}
+
+function normalizePathForCompare(p) {
+  if (!p) return '';
+  var s = String(p).replace(/\\/g, '/');
+  if (s.length > 1 && s.endsWith('/')) s = s.slice(0, -1);
+  if (/^[A-Za-z]:/.test(s)) s = s[0].toLowerCase() + s.slice(1);
+  return s;
+}
+
+var pathExistsCache = new Map();
+async function isTargetPresent(p) {
+  var now = Date.now();
+  var hit = pathExistsCache.get(p);
+  if (hit && hit.expiresAt > now) return hit.result;
+  var result = await window.electronAPI.pathExists(p);
+  pathExistsCache.set(p, { result: result, expiresAt: now + 30000 });
+  return result;
+}
+
+function invalidatePathExists(p) {
+  if (p) pathExistsCache.delete(p);
+}
+
+var lastGitTargetHint = { text: '', title: '' };
+
+function updateGitTargetIndicator(opts) {
+  opts = opts || {};
+  if (!gitHeaderEl) return;
+  var target = gitTargetCwd();
+  var targetNorm = normalizePathForCompare(target);
+  var rootNorm = normalizePathForCompare(activeProjectKey);
+
+  var labelText = '';
+  var titleText = target || '';
+
+  if (target && targetNorm !== rootNorm) {
+    if (rootNorm && targetNorm.indexOf(rootNorm + '/') === 0) {
+      labelText = '→ ./' + targetNorm.slice(rootNorm.length + 1);
+    } else {
+      labelText = '→ ' + target;
+    }
+  }
+
+  var suffix = '';
+  if (opts.directoryMissing) {
+    suffix = ' · directory missing';
+  } else if (opts.notARepo) {
+    suffix = ' · not a git repo';
+  }
+
+  var existing = gitHeaderEl.querySelector('.git-target-hint');
+
+  if (!labelText && !suffix) {
+    if (existing) existing.remove();
+    lastGitTargetHint = { text: '', title: '' };
+    return;
+  }
+
+  var fullText = (labelText || (target ? '→ ' + target : '')) + suffix;
+
+  if (existing && existing.textContent === fullText && existing.getAttribute('title') === titleText) {
+    lastGitTargetHint = { text: fullText, title: titleText };
+    return;
+  }
+
+  if (existing) existing.remove();
+
+  var hint = document.createElement('div');
+  hint.className = 'git-target-hint';
+  hint.textContent = fullText;
+  if (titleText) hint.setAttribute('title', titleText);
+  gitHeaderEl.appendChild(hint);
+  lastGitTargetHint = { text: fullText, title: titleText };
+}
+
 function refreshGitStatus(force) {
   if (!activeProjectKey || !window.electronAPI) return;
   // Skip background polls if a previous batch is still running — prevents
   // backed-up git calls piling up on the main thread when the repo or disk is slow.
   if (gitPollInFlight && !force) return;
 
-  var fetchAll = [
-    window.electronAPI.gitStatus(activeProjectKey),
-    window.electronAPI.gitBranch(activeProjectKey),
-    window.electronAPI.gitAheadBehind(activeProjectKey),
-    window.electronAPI.gitStashList(activeProjectKey),
-    window.electronAPI.gitGraphLog(activeProjectKey, 50),
-    window.electronAPI.gitDiffStat(activeProjectKey, false),
-    window.electronAPI.gitDiffStat(activeProjectKey, true)
-  ];
+  var target = gitTargetCwd();
 
   gitPollInFlight = true;
   var done = function () { gitPollInFlight = false; };
 
-  if (!force) {
-    Promise.all(fetchAll).then(function (results) {
-      var rawKey = JSON.stringify(results[0]) + '|' + results[1] + '|' + JSON.stringify(results[2]) + '|' + results[3].length + '|' + JSON.stringify(results[4]);
-      if (rawKey === lastGitRaw) return;
-      lastGitRaw = rawKey;
-      renderGitStatus(results[0], results[1], results[2], results[3], results[4], results[5], results[6]);
-    }).then(done, done);
-    return;
-  }
+  isTargetPresent(target).then(function (present) {
+    if (!present) {
+      lastGitRaw = null;
+      while (gitHeaderEl.firstChild) gitHeaderEl.removeChild(gitHeaderEl.firstChild);
+      while (gitChangesEl.firstChild) gitChangesEl.removeChild(gitChangesEl.firstChild);
+      updateGitTargetIndicator({ directoryMissing: true });
+      done();
+      return;
+    }
 
-  lastGitRaw = null;
-  Promise.all(fetchAll).then(function (results) {
-    lastGitRaw = JSON.stringify(results[0]) + '|' + results[1] + '|' + JSON.stringify(results[2]) + '|' + results[3].length + '|' + JSON.stringify(results[4]);
-    renderGitStatus(results[0], results[1], results[2], results[3], results[4], results[5], results[6]);
-  }).then(done, done);
+    var fetchAll = [
+      window.electronAPI.gitStatus(target),
+      window.electronAPI.gitBranch(target),
+      window.electronAPI.gitAheadBehind(target),
+      window.electronAPI.gitStashList(target),
+      window.electronAPI.gitGraphLog(target, 50),
+      window.electronAPI.gitDiffStat(target, false),
+      window.electronAPI.gitDiffStat(target, true),
+      window.electronAPI.gitIsInsideWorkTree(target)
+    ];
+
+    if (!force) {
+      Promise.all(fetchAll).then(function (results) {
+        var rawKey = JSON.stringify(results[0]) + '|' + results[1] + '|' + JSON.stringify(results[2]) + '|' + results[3].length + '|' + JSON.stringify(results[4]) + '|' + results[7];
+        if (rawKey === lastGitRaw) return;
+        lastGitRaw = rawKey;
+        renderGitStatus(results[0], results[1], results[2], results[3], results[4], results[5], results[6]);
+        updateGitTargetIndicator({ notARepo: !results[7] });
+      }).then(done, done);
+      return;
+    }
+
+    lastGitRaw = null;
+    Promise.all(fetchAll).then(function (results) {
+      lastGitRaw = JSON.stringify(results[0]) + '|' + results[1] + '|' + JSON.stringify(results[2]) + '|' + results[3].length + '|' + JSON.stringify(results[4]) + '|' + results[7];
+      renderGitStatus(results[0], results[1], results[2], results[3], results[4], results[5], results[6]);
+      updateGitTargetIndicator({ notARepo: !results[7] });
+    }).then(done, done);
+  }, done);
 }
 
 function renderGitStatus(files, branch, aheadBehind, stashes, graphLog, unstagedStats, stagedStats) {
@@ -5039,7 +5152,7 @@ function toggleBranchDropdown(parentRow, currentBranch) {
   });
   dropdown.appendChild(newOpt);
 
-  window.electronAPI.gitBranches(activeProjectKey).then(function (branches) {
+  window.electronAPI.gitBranches(gitTargetCwd()).then(function (branches) {
     for (var i = 0; i < branches.length; i++) {
       (function (b) {
         var item = document.createElement('div');
@@ -5528,27 +5641,27 @@ function gitStatusClass(status) {
 
 function gitStageFile(filePath) {
   if (!activeProjectKey || !window.electronAPI) return;
-  window.electronAPI.gitStageFile(activeProjectKey, filePath).then(function () { refreshGitStatus(); });
+  window.electronAPI.gitStageFile(gitTargetCwd(), filePath).then(function () { refreshGitStatus(); });
 }
 
 function gitUnstageFile(filePath) {
   if (!activeProjectKey || !window.electronAPI) return;
-  window.electronAPI.gitUnstageFile(activeProjectKey, filePath).then(function () { refreshGitStatus(); });
+  window.electronAPI.gitUnstageFile(gitTargetCwd(), filePath).then(function () { refreshGitStatus(); });
 }
 
 function gitStageAll() {
   if (!activeProjectKey || !window.electronAPI) return;
-  window.electronAPI.gitStageAll(activeProjectKey).then(function () { refreshGitStatus(); });
+  window.electronAPI.gitStageAll(gitTargetCwd()).then(function () { refreshGitStatus(); });
 }
 
 function gitUnstageAll() {
   if (!activeProjectKey || !window.electronAPI) return;
-  window.electronAPI.gitUnstageAll(activeProjectKey).then(function () { refreshGitStatus(); });
+  window.electronAPI.gitUnstageAll(gitTargetCwd()).then(function () { refreshGitStatus(); });
 }
 
 function gitDiscardFile(filePath) {
   if (!activeProjectKey || !window.electronAPI) return;
-  window.electronAPI.gitDiscardFile(activeProjectKey, filePath).then(function () { refreshGitStatus(); });
+  window.electronAPI.gitDiscardFile(gitTargetCwd(), filePath).then(function () { refreshGitStatus(); });
 }
 
 function gitCommit() {
@@ -5556,7 +5669,7 @@ function gitCommit() {
   var msg = gitCommitMsg.value.trim();
   if (!msg) return;
   var amend = gitAmendCheckbox && gitAmendCheckbox.checked;
-  window.electronAPI.gitCommit(activeProjectKey, msg, amend).then(function (result) {
+  window.electronAPI.gitCommit(gitTargetCwd(), msg, amend).then(function (result) {
     if (result.success) {
       gitCommitMsg.value = '';
       if (gitAmendCheckbox) gitAmendCheckbox.checked = false;
@@ -5571,7 +5684,7 @@ function gitCommit() {
 function gitCheckout(branchName) {
   if (!activeProjectKey || !window.electronAPI) return;
   showGitStatus('Switching to ' + branchName + '...');
-  window.electronAPI.gitCheckout(activeProjectKey, branchName).then(function (result) {
+  window.electronAPI.gitCheckout(gitTargetCwd(), branchName).then(function (result) {
     if (result.success) {
       showGitStatus('Switched to ' + branchName);
       refreshGitStatus(true);
@@ -5584,7 +5697,7 @@ function gitCheckout(branchName) {
 function gitCreateBranch(branchName) {
   if (!activeProjectKey || !window.electronAPI) return;
   showGitStatus('Creating ' + branchName + '...');
-  window.electronAPI.gitCreateBranch(activeProjectKey, branchName).then(function (result) {
+  window.electronAPI.gitCreateBranch(gitTargetCwd(), branchName).then(function (result) {
     if (result.success) {
       showGitStatus('Created and switched to ' + branchName);
       refreshGitStatus(true);
@@ -5597,7 +5710,7 @@ function gitCreateBranch(branchName) {
 function gitStashPush() {
   if (!activeProjectKey || !window.electronAPI) return;
   showGitStatus('Stashing...');
-  window.electronAPI.gitStashPush(activeProjectKey).then(function (result) {
+  window.electronAPI.gitStashPush(gitTargetCwd()).then(function (result) {
     if (result.success) {
       showGitStatus('Changes stashed');
       refreshGitStatus(true);
@@ -5610,7 +5723,7 @@ function gitStashPush() {
 function gitStashPop() {
   if (!activeProjectKey || !window.electronAPI) return;
   showGitStatus('Popping stash...');
-  window.electronAPI.gitStashPop(activeProjectKey).then(function (result) {
+  window.electronAPI.gitStashPop(gitTargetCwd()).then(function (result) {
     if (result.success) {
       showGitStatus('Stash popped');
       refreshGitStatus(true);
@@ -5623,7 +5736,7 @@ function gitStashPop() {
 function gitPull() {
   if (!activeProjectKey || !window.electronAPI) return;
   showGitStatus('Pulling...');
-  window.electronAPI.gitPull(activeProjectKey).then(function (result) {
+  window.electronAPI.gitPull(gitTargetCwd()).then(function (result) {
     if (result.success) {
       showGitStatus(result.output || 'Pull complete');
       refreshGitStatus();
@@ -5636,7 +5749,7 @@ function gitPull() {
 function gitPush() {
   if (!activeProjectKey || !window.electronAPI) return;
   showGitStatus('Pushing...');
-  window.electronAPI.gitPush(activeProjectKey).then(function (result) {
+  window.electronAPI.gitPush(gitTargetCwd()).then(function (result) {
     if (result.success) {
       showGitStatus(result.output || 'Push complete');
     } else {
@@ -6644,7 +6757,7 @@ if (window.electronAPI && window.electronAPI.getHookServerPort) {
 // Init
 // ============================================================
 
-btnAdd.addEventListener('click', function () {
+btnAdd.addEventListener('click', async function () {
   if (optHeadless.checked) {
     // Consume the transient flag immediately — don't persist it.
     optHeadless.checked = false;
@@ -6652,8 +6765,25 @@ btnAdd.addEventListener('click', function () {
     openHeadlessDock();
     return;
   }
-  var args = buildSpawnArgs();
-  addColumn(args.length > 0 ? args : null);
+  if (btnAdd.disabled) return;
+  btnAdd.disabled = true;
+  try {
+    var projectAtClick = activeProjectKey;
+    var raw = optWorktree.value.trim();
+    var resolved = { kind: 'none' };
+    if (raw && projectAtClick) {
+      resolved = await window.electronAPI.resolveWorktree(projectAtClick, raw);
+    }
+    if (activeProjectKey !== projectAtClick) return;
+    var spawnOpts = {};
+    if (resolved.kind === 'cwd') {
+      spawnOpts.cwd = resolved.path;
+    }
+    var args = buildSpawnArgs(resolved);
+    addColumn(args.length > 0 ? args : null, null, spawnOpts);
+  } finally {
+    btnAdd.disabled = false;
+  }
 });
 btnAddRow.addEventListener('click', addRow);
 btnToggleSidebar.addEventListener('click', toggleSidebar);
@@ -6702,7 +6832,7 @@ function closeSpawnDropdown() {
   spawnDropdown.classList.add('hidden');
 }
 
-function buildSpawnArgs() {
+function buildSpawnArgs(resolved) {
   var args = [];
   if (optSkipPermissions.checked) {
     args.push('--dangerously-skip-permissions');
@@ -6718,7 +6848,9 @@ function buildSpawnArgs() {
   }
   var worktree = optWorktree.value.trim();
   if (worktree) {
-    args.push('--worktree', worktree);
+    if (!resolved || resolved.kind === 'flag' || resolved.kind === 'none') {
+      args.push('--worktree', worktree);
+    }
   }
   var custom = optCustomArgs.value.trim();
   if (custom) {
