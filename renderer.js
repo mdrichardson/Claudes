@@ -576,7 +576,7 @@ function connectWS() {
           // Drift diagnostic: working state + "Plan" in tail but never matched.
           if (!col.bannerDriftWarned && col.bannerEverMatched !== true &&
               col.activityState === 'working' &&
-              col.bannerTail && col.bannerTail.indexOf('Plan') !== -1) {
+              col.bannerTail && /plan/i.test(col.bannerTail)) {
             console.warn('Pipeline visualizer: plan-mode-like activity detected but banner regex did not match. Claude Code may have changed its banner format.');
             col.bannerDriftWarned = true;
           }

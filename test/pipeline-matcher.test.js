@@ -47,34 +47,33 @@ function makeState(overrides) {
 // 1. PLAN_MODE_BANNER regex matches
 // ---------------------------------------------------------------------------
 
-test('PLAN_MODE_BANNER: matches strict 2.1.123 dual-region form', () => {
-  // (a) \x1b[7mPlan \x1b[0m\x1b[7mMode\x1b[0m
-  const input = '\x1b[7mPlan \x1b[0m\x1b[7mMode\x1b[0m';
+test('PLAN_MODE_BANNER: matches Claude 2.1.123 captured shape (24-bit RGB foreground)', () => {
+  // Real bytes captured from Claude Code 2.1.123 entering plan mode:
+  // \x1b[38;2;72;150;140m{bullet} plan mode on \x1b[38;2;153;153;153m(shift+tab to cycle)
+  const input = '\x1b[38;2;72;150;140m⯏ plan mode on \x1b[38;2;153;153;153m(shift+tab to cycle)';
   assert.ok(PLAN_MODE_BANNER.test(input));
 });
 
-test('PLAN_MODE_BANNER: matches single-region form', () => {
-  // (b) \x1b[7m Plan Mode \x1b[0m
-  const input = '\x1b[7m Plan Mode \x1b[0m';
-  assert.ok(PLAN_MODE_BANNER.test(input));
+test('PLAN_MODE_BANNER: matches simple SGR + literal phrase', () => {
+  assert.ok(PLAN_MODE_BANNER.test('\x1b[7m plan mode on \x1b[0m'));
+  assert.ok(PLAN_MODE_BANNER.test('\x1b[1;36m plan mode on'));
 });
 
-test('PLAN_MODE_BANNER: matches SGR-27 variant', () => {
-  // (c) \x1b[7mPlan\x1b[27m\x1b[7mMode\x1b[0m
-  const input = '\x1b[7mPlan\x1b[27m\x1b[7mMode\x1b[0m';
-  assert.ok(PLAN_MODE_BANNER.test(input));
+test('PLAN_MODE_BANNER: case-insensitive on the phrase', () => {
+  assert.ok(PLAN_MODE_BANNER.test('\x1b[7m Plan Mode On'));
+  assert.ok(PLAN_MODE_BANNER.test('\x1b[7m PLAN MODE ON'));
 });
 
-test('PLAN_MODE_BANNER: does not match isolated "Plan" without SGR-7 prefix', () => {
-  // (d)
-  assert.ok(!PLAN_MODE_BANNER.test('Plan'));
-  assert.ok(!PLAN_MODE_BANNER.test('Mode'));
-  assert.ok(!PLAN_MODE_BANNER.test('Plan Mode'));
+test('PLAN_MODE_BANNER: does not match unstyled "plan mode on" (no SGR prefix)', () => {
+  // Conversation text Claude generates in plain output — no leading SGR escape
+  // within the 40-byte gap. Must not false-positive.
+  assert.ok(!PLAN_MODE_BANNER.test('plan mode on'));
+  assert.ok(!PLAN_MODE_BANNER.test('I will turn plan mode on shortly'));
 });
 
-test('PLAN_MODE_BANNER: does not match when Plan and Mode are 100+ chars apart', () => {
-  // (e) gap-cap
-  const input = '\x1b[7mPlan\x1b[0m' + 'x'.repeat(100) + 'Mode';
+test('PLAN_MODE_BANNER: does not match when SGR escape is far from phrase', () => {
+  // SGR-end-of-prefix more than 40 bytes from the literal phrase: rejected.
+  const input = '\x1b[7m' + 'x'.repeat(60) + 'plan mode on';
   assert.ok(!PLAN_MODE_BANNER.test(input));
 });
 
@@ -83,8 +82,8 @@ test('PLAN_MODE_BANNER: does not match when Plan and Mode are 100+ chars apart',
 // ---------------------------------------------------------------------------
 
 test('PLAN_MODE_BANNER: matches across split chunks when concatenated', () => {
-  const prevTail = '\x1b[7mPlan \x1b[0m';
-  const chunk    = '\x1b[7mMode\x1b[0m';
+  const prevTail = '\x1b[38;2;72;150;140m⯏ plan ';
+  const chunk    = 'mode on \x1b[0m';
   assert.ok(PLAN_MODE_BANNER.test(prevTail + chunk));
   assert.ok(!PLAN_MODE_BANNER.test(chunk));
 });
