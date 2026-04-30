@@ -29,7 +29,17 @@ const AUTOMATIONS_FILE = path.join(CONFIG_DIR, app.isPackaged ? 'automations.jso
 const AUTOMATIONS_RUNS_DIR = path.join(CONFIG_DIR, app.isPackaged ? 'automation-runs' : 'automation-runs-dev');
 const AGENTS_DIR_DEFAULT = path.join(CONFIG_DIR, app.isPackaged ? 'agents' : 'agents-dev');
 const PIPELINES_FILE = path.join(CONFIG_DIR, app.isPackaged ? 'pipelines.json' : 'pipelines-dev.json');
-const DEFAULT_PIPELINES = { version: 1, pipeline: { id: 'default', name: 'Default workflow', userSteps: [] } };
+const DEFAULT_PIPELINES = {
+  version: 1,
+  pipeline: {
+    id: 'default',
+    name: 'Default workflow',
+    userSteps: [
+      { id: 'anchor-plan', label: 'Plan', keywords: [] },
+      { id: 'anchor-execute', label: 'Execute', keywords: [] }
+    ]
+  }
+};
 
 // --- Config ---
 
@@ -535,6 +545,14 @@ ipcMain.handle('pipelines:get', () => {
     const raw = fs.readFileSync(PIPELINES_FILE, 'utf8');
     const data = JSON.parse(raw);
     if (data && typeof data === 'object' && data.pipeline && Array.isArray(data.pipeline.userSteps)) {
+      const steps = data.pipeline.userSteps;
+      const hasPlan = steps.some(s => s && s.id === 'anchor-plan');
+      const hasExec = steps.some(s => s && s.id === 'anchor-execute');
+      if (!hasPlan) steps.unshift({ id: 'anchor-plan', label: 'Plan', keywords: [] });
+      if (!hasExec) {
+        const planIdx = steps.findIndex(s => s && s.id === 'anchor-plan');
+        steps.splice(planIdx + 1, 0, { id: 'anchor-execute', label: 'Execute', keywords: [] });
+      }
       return data;
     }
   } catch (e) { /* file missing, parse error, wrong shape */ }
@@ -547,7 +565,10 @@ ipcMain.handle('pipelines:save', (event, data) => {
   const incoming = (data && typeof data === 'object') ? data : {};
   const pipeline = (incoming.pipeline && typeof incoming.pipeline === 'object')
     ? incoming.pipeline
-    : { id: 'default', name: 'Default workflow', userSteps: [] };
+    : { id: 'default', name: 'Default workflow', userSteps: [
+        { id: 'anchor-plan', label: 'Plan', keywords: [] },
+        { id: 'anchor-execute', label: 'Execute', keywords: [] }
+      ] };
   const userSteps = Array.isArray(pipeline.userSteps) ? pipeline.userSteps : [];
   const payload = {
     ...incoming,
