@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const { spawn, execFile, execFileSync } = require('child_process');
 const http = require('http');
+const { resolveWorktreeCandidates, pathIsDirectory } = require('./lib/path-utils');
 
 // Set appUserModelId early so Windows uses a consistent taskbar icon across restarts
 app.setAppUserModelId('com.thecodeguy.claudes');
@@ -1199,6 +1200,22 @@ ipcMain.handle('git:diffStat', async (event, projectPath, staged) => {
     });
   } catch {
     return [];
+  }
+});
+
+ipcMain.handle('paths:resolveWorktree', (event, projectPath, value) =>
+  resolveWorktreeCandidates(projectPath, value, fs.promises.stat));
+
+ipcMain.handle('paths:exists', (event, p) =>
+  pathIsDirectory(p, fs.promises.stat));
+
+ipcMain.handle('git:isInsideWorkTree', async (event, cwd) => {
+  if (!cwd) return false;
+  try {
+    const out = await runGit(cwd, ['rev-parse', '--is-inside-work-tree'], 5000);
+    return out.trim() === 'true';
+  } catch {
+    return false;
   }
 });
 
