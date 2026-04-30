@@ -79,10 +79,11 @@ test('PLAN_MODE_BANNER: does not match unstyled "plan mode on" (no SGR prefix)',
   assert.ok(!PLAN_MODE_BANNER.test('I will turn plan mode on shortly'));
 });
 
-test('PLAN_MODE_BANNER: does not match when SGR escape is far from phrase', () => {
-  // SGR-end-of-prefix more than 80 units from the literal phrase: rejected.
-  // Using 100 plain chars — exceeds the {0,80} cap in the regex regardless of
-  // whether those chars are plain bytes or embedded escapes.
+test('PLAN_MODE_BANNER: does not match when SGR escape is far from phrase (plain-byte gap)', () => {
+  // 100 plain bytes between the SGR and the phrase. Each plain byte counts
+  // as one unit under the regex's {0,80} cap, so 100 > 80 → rejected.
+  // (Note: a CSI escape in the gap counts as a *single* unit regardless of
+  // its byte length, so the cap bounds units, not raw bytes.)
   const input = '\x1b[7m' + 'x'.repeat(100) + 'plan mode on';
   assert.ok(!PLAN_MODE_BANNER.test(input));
 });
