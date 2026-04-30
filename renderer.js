@@ -499,45 +499,6 @@ function resolveSteps(cfg) {
   return steps;
 }
 
-function buildPipelineState(persisted) {
-  var state = {
-    visible: false,
-    steps: resolveSteps(pipelinesConfig),
-    currentIdx: 0,
-    flags: { plan: false },
-    lastBannerSeenAt: 0,
-    bannerTail: '',
-    exitCheckIntervalId: null,
-    restoredWithProgress: false
-  };
-  if (persisted && typeof persisted === 'object') {
-    if (Array.isArray(persisted.steps) && persisted.steps.length > 0) {
-      // Use persisted step list directly so progress is preserved across pipeline edits.
-      state.steps = persisted.steps.map(function (s) {
-        return { id: s.id, label: s.label, complete: !!s.complete };
-      });
-    }
-    if (typeof persisted.currentIdx === 'number' && persisted.currentIdx >= 0) {
-      state.currentIdx = Math.min(persisted.currentIdx, state.steps.length);
-    }
-    if (typeof persisted.visible === 'boolean') state.visible = persisted.visible;
-    var anyComplete = state.steps.some(function (s) { return s.complete === true; });
-    if (anyComplete || state.currentIdx > 0) state.restoredWithProgress = true;
-  }
-  return state;
-}
-
-function serializePipeline(pipelineState) {
-  if (!pipelineState) return null;
-  return {
-    steps: (pipelineState.steps || []).map(function (s) {
-      return { id: s.id, label: s.label, complete: !!s.complete };
-    }),
-    currentIdx: pipelineState.currentIdx || 0,
-    visible: !!pipelineState.visible
-  };
-}
-
 // Trailing-debounced wrapper around persistSessions; coalesces rapid mutations.
 var pipelinePersistTimer = null;
 function persistSessionsDebounced(projectKey, workspaceId) {
@@ -588,7 +549,6 @@ function connectWS() {
               if (col.pipeline.restoredWithProgress) {
                 col.pipeline.flags.plan = true;
                 col.pipeline.lastBannerSeenAt = Date.now();
-                col.pipeline.bannerTail = '';
                 col.pipeline.restoredWithProgress = false;
                 col.pipeline.visible = true;
               } else {
@@ -2605,6 +2565,7 @@ function restoreSessions(projectPath, workspaceId) {
             console.warn("Column '" + (e.title || e.sessionId) + "' had cwd " + e.cwd + " which no longer exists; restored at project root.");
           }
         }
+        if (e.pipeline) rowOpts.pipelineState = e.pipeline;
         addColumn(spawnArgs.concat(['--resume', e.sessionId]), targetRow, rowOpts);
       }
 
@@ -3402,7 +3363,7 @@ function addColumn(args, targetRow, opts) {
     notified: false,
     recentCommands: [],
     commandBuffer: '',
-    pipeline: buildPipelineState(opts.pipelineState || null),
+    pipeline: PipelineMatcherAPI.buildPipelineState(opts.pipelineState || null, resolveSteps(pipelinesConfig)),
     pipelineEl: header.querySelector('.col-pipeline'),
     pipelineResizeObserver: null,
     bannerTail: '',
@@ -4161,7 +4122,7 @@ function persistSessions(projectKey, workspaceId) {
         };
         if (col2.cwd && col2.cwd !== activeProjectKey) entry.cwd = col2.cwd;
         if (col2.pipeline) {
-          var serializedPipe = serializePipeline(col2.pipeline);
+          var serializedPipe = PipelineMatcherAPI.serializePipeline(col2.pipeline);
           if (serializedPipe) entry.pipeline = serializedPipe;
         }
         rowEntries.push(entry);

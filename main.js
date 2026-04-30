@@ -560,9 +560,14 @@ ipcMain.handle('pipelines:save', (event, data) => {
     }
   };
   const tmp = PIPELINES_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8');
-  fs.renameSync(tmp, PIPELINES_FILE);
-  return true;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8');
+    fs.renameSync(tmp, PIPELINES_FILE);
+    return true;
+  } catch (err) {
+    console.error('pipelines:save failed:', err);
+    return false;
+  }
 });
 
 ipcMain.handle('popout:setTransfer', (event, projectKey, transferList) => {

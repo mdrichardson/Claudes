@@ -152,7 +152,6 @@ test('applyPlanEnter: first call resets state, returns true', () => {
   assert.strictEqual(state.flags.plan, true);
   assert.strictEqual(state.visible, true);
   assert.strictEqual(state.lastBannerSeenAt, now);
-  assert.strictEqual(state.bannerTail, '');
 });
 
 // ---------------------------------------------------------------------------
@@ -455,7 +454,6 @@ test('serializePipeline / buildPipelineState: round-trip strips and restores tra
   assert.strictEqual(restored.visible, state.visible);
   assert.deepEqual(restored.flags, { plan: false });
   assert.strictEqual(restored.lastBannerSeenAt, 0);
-  assert.strictEqual(restored.bannerTail, '');
   assert.strictEqual(restored.exitCheckIntervalId, null);
 });
 
