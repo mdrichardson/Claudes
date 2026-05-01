@@ -4,6 +4,7 @@ out/
 .env
 *.output
 .claude/settings.local.json
+.claude/skills/
 .claudes/
 .playwright-mcp/
 .superpowers/
