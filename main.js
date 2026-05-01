@@ -356,6 +356,19 @@ function createWindow() {
     }
   });
 
+  // xterm captures these at the renderer; intercept here so F11/Esc still work.
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+    if (input.alt || input.control || input.meta || input.shift) return;
+    if (input.key === 'F11') {
+      mainWindow.setFullScreen(!mainWindow.isFullScreen());
+      event.preventDefault();
+    } else if (input.key === 'Escape' && mainWindow.isFullScreen()) {
+      mainWindow.setFullScreen(false);
+      event.preventDefault();
+    }
+  });
+
   mainWindow.loadFile('index.html');
 
   if (startHidden && process.platform === 'darwin') {
@@ -431,6 +444,19 @@ function createProjectWindow(projectKey) {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false
+    }
+  });
+
+  // xterm captures these at the renderer; intercept here so F11/Esc still work.
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+    if (input.alt || input.control || input.meta || input.shift) return;
+    if (input.key === 'F11') {
+      win.setFullScreen(!win.isFullScreen());
+      event.preventDefault();
+    } else if (input.key === 'Escape' && win.isFullScreen()) {
+      win.setFullScreen(false);
+      event.preventDefault();
     }
   });
 
